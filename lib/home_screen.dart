@@ -1,6 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'Screen/live_room_screen.dart';
 import 'Screen/party_screen.dart';
+
+// ASSUMPTIONS (adjust if your Firestore schema differs):
+// - Collection: 'users'
+// - Field 'isLive' (bool)      -> true when the user is currently live
+// - Field 'totalGifts' (number) -> running total of gifts/points received
+//   Sorting is done by totalGifts DESC, so the top-gifted host always
+//   surfaces first on every load/refresh automatically.
+// - Optional fields: 'name', 'avatar' (emoji/url), 'viewers' (int),
+//   'flag' (emoji), 'tag' ("PK" | "NEW HOST" | null)
+// - Field 'agencyId' (string, nullable) -> set once the user joins an
+//   agency. The Go-Live camera button only appears once this field is
+//   non-empty. No agency system exists yet — once it's built, simply set
+//   this field on the user's document when they join an agency and the
+//   button will start showing automatically, no further code changes needed.
+
+const int _pageSize = 60;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,80 +28,142 @@ class HomeScreen extends StatefulWidget {
 }
 
 class LiveUser {
+  final String id;
   final String name;
   final String image;
   final int viewers;
   final String flag;
-  final String? tag; // "NEW HOST", "PK", null
+  final String? tag;
+  final num totalGifts;
   final List<Color> cardGradient;
 
   const LiveUser({
+    required this.id,
     required this.name,
     required this.image,
     required this.viewers,
     required this.flag,
     this.tag,
+    required this.totalGifts,
     required this.cardGradient,
   });
+
+  factory LiveUser.fromDoc(DocumentSnapshot doc, int index) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    return LiveUser(
+      id: doc.id,
+      name: data['name'] ?? "User",
+      image: data['avatar'] ?? "🧑",
+      viewers: (data['viewers'] ?? 0) is int
+          ? data['viewers'] ?? 0
+          : (data['viewers'] as num?)?.toInt() ?? 0,
+      flag: data['flag'] ?? "🌍",
+      tag: data['tag'],
+      totalGifts: (data['totalGifts'] ?? 0) as num,
+      cardGradient: _gradientPalette[index % _gradientPalette.length],
+    );
+  }
 }
+
+const List<List<Color>> _gradientPalette = [
+  [Color(0xFF3A1C71), Color(0xFF5B2C6F)],
+  [Color(0xFF232526), Color(0xFF414345)],
+  [Color(0xFF614385), Color(0xFF516395)],
+  [Color(0xFF1F1C2C), Color(0xFF928DAB)],
+  [Color(0xFF11998E), Color(0xFF38EF7D)],
+  [Color(0xFFEE0979), Color(0xFFFF6A00)],
+  [Color(0xFF8E2DE2), Color(0xFF4A00E0)],
+  [Color(0xFFFF512F), Color(0xFFDD2476)],
+];
 
 class _HomeScreenState extends State<HomeScreen> {
   final PageController _bannerController = PageController(viewportFraction: 0.92);
+  final ScrollController _gridController = ScrollController();
 
-  final List<LiveUser> liveUsers = const [
-    LiveUser(
-      name: "Ali",
-      image: "🧕",
-      viewers: 553,
-      flag: "🇵🇰",
-      tag: null,
-      cardGradient: [Color(0xFF3A1C71), Color(0xFF5B2C6F)],
-    ),
-    LiveUser(
-      name: "Welcome To Ali",
-      image: "👨‍🦱",
-      viewers: 195,
-      flag: "🇵🇰",
-      tag: "PK",
-      cardGradient: [Color(0xFF232526), Color(0xFF414345)],
-    ),
-    LiveUser(
-      name: "Sara",
-      image: "👩",
-      viewers: 194,
-      flag: "🇮🇳",
-      tag: null,
-      cardGradient: [Color(0xFF614385), Color(0xFF516395)],
-    ),
-    LiveUser(
-      name: "welcome guyzzz I am",
-      image: "👩‍🦳",
-      viewers: 133,
-      flag: "🇧🇩",
-      tag: "PK",
-      cardGradient: [Color(0xFF1F1C2C), Color(0xFF928DAB)],
-    ),
-    LiveUser(
-      name: "Zain",
-      image: "🧑",
-      viewers: 88,
-      flag: "🇵🇰",
-      tag: "NEW HOST",
-      cardGradient: [Color(0xFF11998E), Color(0xFF38EF7D)],
-    ),
-    LiveUser(
-      name: "Ayesha",
-      image: "👩‍🎤",
-      viewers: 342,
-      flag: "🇵🇰",
-      tag: null,
-      cardGradient: [Color(0xFFEE0979), Color(0xFFFF6A00)],
-    ),
-  ];
+  final List<LiveUser> liveUsers = [];
+  DocumentSnapshot? _lastDoc;
+  bool _isLoadingInitial = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
 
-  late List<LiveUser> filteredUsers = liveUsers;
+  late List<LiveUser> filteredUsers = [];
   bool isSearching = false;
   final TextEditingController searchController = TextEditingController();
+
+  Query<Map<String, dynamic>> get _baseQuery => FirebaseFirestore.instance
+      .collection('users')
+      .where('isLive', isEqualTo: true)
+      .orderBy('totalGifts', descending: true);
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchInitial();
+    _gridController.addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _gridController.removeListener(_onScroll);
+    _gridController.dispose();
+    _bannerController.dispose();
+    searchController.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_gridController.hasClients) return;
+    final nearBottom = _gridController.position.pixels >=
+        _gridController.position.maxScrollExtent - 300;
+    if (nearBottom) _fetchMore();
+  }
+
+  Future<void> _fetchInitial() async {
+    setState(() => _isLoadingInitial = true);
+    try {
+      final snap = await _baseQuery.limit(_pageSize).get();
+      liveUsers
+        ..clear()
+        ..addAll(snap.docs.asMap().entries.map((e) => LiveUser.fromDoc(e.value, e.key)));
+      _lastDoc = snap.docs.isNotEmpty ? snap.docs.last : null;
+      _hasMore = snap.docs.length == _pageSize;
+      filteredUsers = liveUsers;
+    } catch (e) {
+      debugPrint("Failed to load live users: $e");
+    } finally {
+      if (mounted) setState(() => _isLoadingInitial = false);
+    }
+  }
+
+  Future<void> _fetchMore() async {
+    if (_isLoadingMore || !_hasMore || _lastDoc == null || isSearching) return;
+    setState(() => _isLoadingMore = true);
+    try {
+      final snap = await _baseQuery.startAfterDocument(_lastDoc!).limit(_pageSize).get();
+      final startIndex = liveUsers.length;
+      final newUsers = snap.docs
+          .asMap()
+          .entries
+          .map((e) => LiveUser.fromDoc(e.value, startIndex + e.key))
+          .toList();
+      setState(() {
+        liveUsers.addAll(newUsers);
+        filteredUsers = liveUsers;
+        _lastDoc = snap.docs.isNotEmpty ? snap.docs.last : _lastDoc;
+        _hasMore = snap.docs.length == _pageSize;
+      });
+    } catch (e) {
+      debugPrint("Failed to load more live users: $e");
+    } finally {
+      if (mounted) setState(() => _isLoadingMore = false);
+    }
+  }
+
+  Future<void> _onRefresh() async {
+    _lastDoc = null;
+    _hasMore = true;
+    await _fetchInitial();
+  }
 
   void openLiveRoom(BuildContext context, String name) {
     Navigator.push(
@@ -301,15 +381,20 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // Top-gifted hosts strip (first N of the sorted-by-gifts list, so this
+  // also naturally reflects whoever is receiving the most gifts right now).
   Widget _liveAvatarsRow() {
+    final topHosts = liveUsers.take(12).toList();
+    if (topHosts.isEmpty) return const SizedBox.shrink();
+
     return SizedBox(
       height: 96,
       child: ListView.builder(
         padding: const EdgeInsets.symmetric(horizontal: 12),
         scrollDirection: Axis.horizontal,
-        itemCount: liveUsers.length,
+        itemCount: topHosts.length,
         itemBuilder: (context, index) {
-          final user = liveUsers[index];
+          final user = topHosts[index];
           return GestureDetector(
             onTap: () => openLiveRoom(context, user.name),
             child: Container(
@@ -317,17 +402,35 @@ class _HomeScreenState extends State<HomeScreen> {
               margin: const EdgeInsets.symmetric(horizontal: 6),
               child: Column(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(2.5),
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(colors: [Color(0xFFFF5F6D), Color(0xFFFFC371)]),
-                    ),
-                    child: CircleAvatar(
-                      radius: 26,
-                      backgroundColor: const Color(0xFF1A1A2E),
-                      child: Text(user.image, style: const TextStyle(fontSize: 22)),
-                    ),
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(2.5),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: LinearGradient(
+                            colors: index < 3
+                                ? [const Color(0xFFFFD700), const Color(0xFFFF8C00)]
+                                : [const Color(0xFFFF5F6D), const Color(0xFFFFC371)],
+                          ),
+                        ),
+                        child: CircleAvatar(
+                          radius: 26,
+                          backgroundColor: const Color(0xFF1A1A2E),
+                          child: Text(user.image, style: const TextStyle(fontSize: 22)),
+                        ),
+                      ),
+                      if (index < 3)
+                        Positioned(
+                          top: -6,
+                          right: -2,
+                          child: Text(
+                            index == 0 ? "🥇" : (index == 1 ? "🥈" : "🥉"),
+                            style: const TextStyle(fontSize: 16),
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -357,7 +460,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _liveCard(LiveUser user) {
+  Widget _liveCard(LiveUser user, int rank) {
     return InkWell(
       onTap: () => openLiveRoom(context, user.name),
       borderRadius: BorderRadius.circular(16),
@@ -369,6 +472,13 @@ class _HomeScreenState extends State<HomeScreen> {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
+          boxShadow: [
+            BoxShadow(
+              color: user.cardGradient[0].withOpacity(0.35),
+              blurRadius: 12,
+              offset: const Offset(0, 5),
+            ),
+          ],
         ),
         clipBehavior: Clip.antiAlias,
         child: Stack(
@@ -441,6 +551,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+            // Top-gifted rank badge (crown for #1 overall)
+            if (rank == 0)
+              Positioned(
+                top: 8,
+                left: 8,
+                child: Text("👑", style: const TextStyle(fontSize: 16)),
+              ),
             // Bottom name overlay
             Positioned(
               bottom: 0,
@@ -476,10 +593,80 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _shimmerGrid() {
+    return GridView.builder(
+      padding: const EdgeInsets.all(10),
+      itemCount: 8,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        childAspectRatio: 0.78,
+      ),
+      itemBuilder: (context, index) => Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
+    );
+  }
+
+  Widget _goLiveButton() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+
+    return StreamBuilder<DocumentSnapshot>(
+      stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || !snapshot.data!.exists) return const SizedBox.shrink();
+
+        final data = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+        final agencyId = data['agencyId'];
+        final hasAgency = agencyId != null && agencyId.toString().trim().isNotEmpty;
+
+        if (!hasAgency) return const SizedBox.shrink();
+
+        return Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              colors: [Color(0xFFFF512F), Color(0xFFDD2476)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.redAccent.withOpacity(0.45),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.camera_alt, color: Colors.white, size: 26),
+            tooltip: "Go Live",
+            onPressed: () {
+              // TODO: wire this to your actual Go-Live flow/screen once it's built.
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Go Live flow abhi connect karna hai")),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0B1E),
+      floatingActionButton: Padding(
+        padding: const EdgeInsets.only(bottom: 8, right: 4),
+        child: _goLiveButton(),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
       body: SafeArea(
         child: Column(
           children: [
@@ -491,21 +678,46 @@ class _HomeScreenState extends State<HomeScreen> {
               const Divider(color: Colors.white12, height: 1),
             ],
             Expanded(
-              child: filteredUsers.isEmpty
-                  ? const Center(
-                      child: Text("No users found", style: TextStyle(color: Colors.white38)),
-                    )
-                  : GridView.builder(
-                      padding: const EdgeInsets.all(10),
-                      itemCount: filteredUsers.length,
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 10,
-                        mainAxisSpacing: 10,
-                        childAspectRatio: 0.78,
-                      ),
-                      itemBuilder: (context, index) => _liveCard(filteredUsers[index]),
-                    ),
+              child: _isLoadingInitial
+                  ? _shimmerGrid()
+                  : filteredUsers.isEmpty
+                      ? const Center(
+                          child: Text("No users found", style: TextStyle(color: Colors.white38)),
+                        )
+                      : RefreshIndicator(
+                          color: Colors.amberAccent,
+                          backgroundColor: const Color(0xFF1A1A2E),
+                          onRefresh: _onRefresh,
+                          child: GridView.builder(
+                            controller: _gridController,
+                            padding: const EdgeInsets.all(10),
+                            itemCount: filteredUsers.length + (_hasMore && !isSearching ? 1 : 0),
+                            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              crossAxisSpacing: 10,
+                              mainAxisSpacing: 10,
+                              childAspectRatio: 0.78,
+                            ),
+                            itemBuilder: (context, index) {
+                              if (index >= filteredUsers.length) {
+                                return const Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.all(12),
+                                    child: SizedBox(
+                                      width: 22,
+                                      height: 22,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.amberAccent,
+                                        strokeWidth: 2.5,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
+                              return _liveCard(filteredUsers[index], index);
+                            },
+                          ),
+                        ),
             ),
           ],
         ),

@@ -8,8 +8,7 @@ plugins {
 android {
     namespace = "com.directsurveillance.pk_live"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "26.1.10909125" // Pinned — NDK 27 ke sath agora_rtc_engine ka C++ linking break hota hai
-
+    ndkVersion = "27.0.12077973" 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

@@ -44,9 +44,21 @@ dependencies:
   # Image picking - used to select cover photo from gallery
   image_picker: ^1.1.2
 
+  # HTTP requests - used for Cloudinary image uploads
+  http: ^1.2.2
+
+  # Google Sign-In - used for Gmail signup/login
+  google_sign_in: ^6.2.1
+
   # Party room voice chat
   agora_rtc_engine: ^6.6.3
   permission_handler: ^11.3.1
+
+  # Phone number field with country code picker - used in signup screen
+  intl_phone_field: ^3.2.0
+
+  # Country picker - used in complete profile screen
+  country_picker: ^2.0.26
 
 dev_dependencies:
   flutter_test:

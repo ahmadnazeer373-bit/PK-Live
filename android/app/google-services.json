@@ -12,7 +12,20 @@
           "package_name": "com.directsurveillance.pk_live"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "74868754139-ovp8pjul015ggv1mbd3rm5vqhstk2a6d.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.directsurveillance.pk_live",
+            "certificate_hash": "797a803eaf0072d4fd6a99425228ac6fab9f1afe"
+          }
+        },
+        {
+          "client_id": "74868754139-6a8606lmv9dhf1e67tm9j46t43o6icns.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyB3rKxhQ2p_rPIAdG3o5bHz4xD3JkKYUwc"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "74868754139-6a8606lmv9dhf1e67tm9j46t43o6icns.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

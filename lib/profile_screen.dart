@@ -2,6 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'edit_profile_screen.dart';
+import 'auth_screen.dart';
+import 'become_host_screen.dart';
+import 'admin_agency_review_screen.dart';
+import 'agency_owner_dashboard.dart';
+import 'host_center_screen.dart';
+
+// Only this UID will see the Admin option in the profile screen.
+const String _adminUid = "1dd7eMMAm9dp6QqOzQsr5eJXPjB2";
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -14,6 +22,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int selectedTab = 0; // 0 = About me, 1 = Moment
 
   User? get user => FirebaseAuth.instance.currentUser;
+
+  Future<void> _confirmSignOut() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1930),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Sign Out", style: TextStyle(color: Colors.white)),
+        content: const Text(
+          "Kya aap sign out karna chahte hain?",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Sign Out", style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _signOut();
+    }
+  }
+
+  Future<void> _signOut() async {
+    try {
+      await FirebaseAuth.instance.signOut();
+      if (!mounted) return;
+
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const AuthScreen()),
+        (route) => false,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Sign out nahi ho saka: $e")),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +110,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           final userID = data['userID'] ?? "";
           final country = data['country'] ?? "";
           final bio = data['bio'] ?? "";
+          final ownedAgencyId = data['ownedAgencyId'] as String?;
+          final agencyId = data['agencyId'] as String?;
 
           final covers = [
             [const Color(0xFF6A11CB), const Color(0xFF2575FC)],
@@ -100,14 +156,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Positioned(
                       top: 40,
                       right: 16,
-                      child: IconButton(
-                        icon: const Icon(Icons.edit, color: Colors.white),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (context) => const EditProfileScreen()),
-                          );
-                        },
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit, color: Colors.white),
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (context) => const EditProfileScreen()),
+                              );
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.logout, color: Colors.white),
+                            tooltip: "Sign Out",
+                            onPressed: _confirmSignOut,
+                          ),
+                        ],
                       ),
                     ),
                     Positioned(
@@ -202,6 +267,53 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                           child: const Icon(Icons.add, color: Colors.white38),
                         ),
+                        const SizedBox(height: 24),
+                        if (user?.uid == _adminUid) ...[
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => const AdminAgencyReviewScreen()),
+                                );
+                              },
+                              icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.greenAccent),
+                              label: const Text(
+                                "Admin: Review Agencies",
+                                style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                side: const BorderSide(color: Colors.greenAccent),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                        ],
+                        _hostSectionBanner(context, ownedAgencyId: ownedAgencyId, agencyId: agencyId),
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: _confirmSignOut,
+                            icon: const Icon(Icons.logout, color: Colors.redAccent),
+                            label: const Text(
+                              "Sign Out",
+                              style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              side: const BorderSide(color: Colors.redAccent),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                          ),
+                        ),
                       ] else ...[
                         const Padding(
                           padding: EdgeInsets.symmetric(vertical: 40),
@@ -218,6 +330,67 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _hostSectionBanner(BuildContext context, {required String? ownedAgencyId, required String? agencyId}) {
+    late final IconData icon;
+    late final String title;
+    late final String subtitle;
+    late final Widget destination;
+
+    if (ownedAgencyId != null) {
+      icon = Icons.dashboard_customize_outlined;
+      title = "Agency Dashboard";
+      subtitle = "Apna invite code aur host requests dekhein";
+      destination = const AgencyOwnerDashboard();
+    } else if (agencyId != null) {
+      icon = Icons.leaderboard_outlined;
+      title = "Host Dashboard";
+      subtitle = "Apni earnings aur activity dekhein";
+      destination = const HostCenterScreen();
+    } else {
+      icon = Icons.mic_external_on_outlined;
+      title = "Become a Host";
+      subtitle = "Apni agency banayein ya kisi agency ko join karein";
+      destination = const BecomeHostScreen();
+    }
+
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(context, MaterialPageRoute(builder: (context) => destination));
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 18),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(colors: [Color(0xFFFF512F), Color(0xFFDD2476)]),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.white, size: 26),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.white),
+          ],
+        ),
       ),
     );
   }
