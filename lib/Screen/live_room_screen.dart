@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
-import 'widgets/top_host_info.dart';
-import 'widgets/live_action_buttons.dart';
-import 'widgets/comment_box.dart';
-import 'widgets/floating_hearts.dart';
+import '../widgets/top_host_info.dart';
+import '../widgets/live_action_buttons.dart';
+import '../widgets/comment_box.dart';
+import '../widgets/floating_hearts.dart';
+import '../widgets/gift_sheet.dart';
 
 class LiveRoomScreen extends StatefulWidget {
   final String userName;
@@ -23,6 +24,8 @@ class _LiveRoomScreenState extends State<LiveRoomScreen> {
 
   Offset? heartPosition;
 
+  final List<String> messages = [];
+
   final TextEditingController commentController =
       TextEditingController();
 
@@ -30,6 +33,33 @@ class _LiveRoomScreenState extends State<LiveRoomScreen> {
     setState(() {
       likeCount++;
     });
+  }
+
+  void sendComment() {
+    final text = commentController.text.trim();
+
+    if (text.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      messages.add("${widget.userName}: $text");
+    });
+
+    commentController.clear();
+  }
+
+  void openGiftSheet() {
+    showGiftSheet(
+      context,
+      onGiftSent: (gift) {
+        setState(() {
+          messages.add(
+            "${widget.userName} sent ${gift.emoji} ${gift.name}",
+          );
+        });
+      },
+    );
   }
 
   @override
@@ -45,94 +75,87 @@ class _LiveRoomScreenState extends State<LiveRoomScreen> {
       body: GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTapDown: (details) {
-  setState(() {
-    heartPosition = details.localPosition;
-    likeCount++;
-  });
-},
-        child: Stack(
-          children: [
+          setState(() {
+            heartPosition = details.localPosition;
+            likeCount++;
+          });
+        },
+        child: SizedBox.expand(
+          child: Stack(
+            children: [
 
-            // Background
-            Positioned.fill(
-              child: Image.network(
-                "https://picsum.photos/600/1200",
-                fit: BoxFit.cover,
+              // Background
+              Positioned.fill(
+                child: Image.network(
+                  "https://picsum.photos/600/1200",
+                  fit: BoxFit.cover,
+                ),
               ),
-            ),
 
-            // Dark Overlay
-            Positioned.fill(
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Color.fromARGB(120, 0, 0, 0),
-                      Colors.transparent,
-                      Colors.transparent,
-                      Color.fromARGB(180, 0, 0, 0),
-                    ],
+              // Dark Overlay
+              Positioned.fill(
+                child: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color.fromARGB(120, 0, 0, 0),
+                        Colors.transparent,
+                        Colors.transparent,
+                        Color.fromARGB(180, 0, 0, 0),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
 
-            // Floating Hearts
-            FloatingHearts(
-              tapPosition: heartPosition,
-            ),
-
-            // Top Host
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: TopHostInfo(
-                userName: widget.userName,
-                likes: likeCount,
-                viewers: viewers,
-                onClose: () {
-                  Navigator.pop(context);
-                },
+              // Floating Hearts
+              Positioned.fill(
+                child: FloatingHearts(
+                  tapPosition: heartPosition,
+                ),
               ),
-            ),
 
-            // Right Buttons
-            Positioned(
-              right: 15,
-              bottom: 140,
-              child: LiveActionButtons(
-                onLike: addLike,
+              // Top Host
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: TopHostInfo(
+                  userName: widget.userName,
+                  likes: likeCount,
+                  viewers: viewers,
+                  onClose: () {
+                    Navigator.pop(context);
+                  },
+                ),
               ),
-            ),
 
-            // Bottom Comment
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              child: CommentBox(
-                controller: commentController,
-                onSend: () {
-                  if (commentController.text.trim().isEmpty) {
-                    return;
-                  }
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        "Comment: ${commentController.text}",
-                      ),
-                    ),
-                  );
-
-                  commentController.clear();
-                },
+              // Right Buttons
+              Positioned(
+                right: 15,
+                bottom: 210,
+                child: LiveActionButtons(
+                  onLike: addLike,
+                  onGift: openGiftSheet,
+                ),
               ),
-            ),
-          ],
+
+              // Bottom Comment
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: CommentBox(
+                  controller: commentController,
+                  messages: messages,
+                  onGift: openGiftSheet,
+                  onSend: sendComment,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

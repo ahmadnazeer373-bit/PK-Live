@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import 'auth_screen.dart';
+import 'main_nav_screen.dart';
+import 'widgets/app_logo.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -9,17 +13,65 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _fadeAnim;
+  late final Animation<double> _scaleAnim;
+
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(seconds: 2), () {
+
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+
+    _fadeAnim = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeIn,
+    );
+
+    _scaleAnim = Tween<double>(
+      begin: 0.85,
+      end: 1.0,
+    ).animate(
+      CurvedAnimation(
+        parent: _controller,
+        curve: Curves.easeOutBack,
+      ),
+    );
+
+    _controller.forward();
+
+    Timer(const Duration(seconds: 3), () {
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const AuthScreen()),
-      );
+
+      final user = FirebaseAuth.instance.currentUser;
+
+      if (user != null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const MainNavScreen(),
+          ),
+        );
+      } else {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const AuthScreen(),
+          ),
+        );
+      }
     });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
   @override
@@ -27,33 +79,95 @@ class _SplashScreenState extends State<SplashScreen> {
     return Scaffold(
       body: Container(
         width: double.infinity,
+        height: double.infinity,
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.black, Color(0xff0d47a1)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFF0D0B1E),
+              Color(0xFF2B1055),
+              Color(0xFF7597DE),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
         ),
-        child: const Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Stack(
           children: [
-            Icon(Icons.live_tv, color: Colors.white, size: 90),
-            SizedBox(height: 20),
-            Text(
-              'PK Live',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 34,
-                fontWeight: FontWeight.bold,
+            Positioned(
+              top: -60,
+              right: -40,
+              child: Container(
+                width: 180,
+                height: 180,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.purpleAccent.withOpacity(0.15),
+                ),
               ),
             ),
-            SizedBox(height: 10),
-            Text(
-              'Welcome to PK Live',
-              style: TextStyle(color: Colors.white70, fontSize: 18),
+            Positioned(
+              bottom: -80,
+              left: -50,
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.redAccent.withOpacity(0.12),
+                ),
+              ),
             ),
-            SizedBox(height: 40),
-            CircularProgressIndicator(color: Colors.white),
+            Center(
+              child: FadeTransition(
+                opacity: _fadeAnim,
+                child: ScaleTransition(
+                  scale: _scaleAnim,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const AppLogo(size: 110),
+                      const SizedBox(height: 24),
+                      ShaderMask(
+                        shaderCallback: (bounds) =>
+                            const LinearGradient(
+                          colors: [
+                            Color(0xFFFFD700),
+                            Colors.white,
+                          ],
+                        ).createShader(bounds),
+                        child: const Text(
+                          'PK Live',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 38,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        'Connect. Stream. Shine.',
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 15,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                      const SizedBox(height: 50),
+                      const SizedBox(
+                        width: 26,
+                        height: 26,
+                        child: CircularProgressIndicator(
+                          color: Colors.amberAccent,
+                          strokeWidth: 2.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
