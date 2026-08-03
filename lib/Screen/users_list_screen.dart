@@ -30,7 +30,7 @@ class UsersListScreen extends StatelessWidget {
 
           if (users.isEmpty) {
             return const Center(
-              child: Text("Koi aur registered user nahi hai", style: TextStyle(color: Colors.white54)),
+              child: Text("No other registered users", style: TextStyle(color: Colors.white54)),
             );
           }
 

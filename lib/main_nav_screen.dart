@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'home_screen.dart';
 import 'Screen/message_inbox_screen.dart';
 import 'profile_screen.dart';
+import 'status_screen.dart';
+import 'Screen/go_live_screen.dart';
+import 'widgets/bottom_bar.dart';
 
 class MainNavScreen extends StatefulWidget {
   const MainNavScreen({super.key});
@@ -15,9 +18,17 @@ class _MainNavScreenState extends State<MainNavScreen> {
 
   final List<Widget> screens = const [
     HomeScreen(),
+    StatusScreen(),
     MessageInboxScreen(),
     ProfileScreen(),
   ];
+
+  void _openGoLive() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const GoLiveScreen()),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,31 +38,12 @@ class _MainNavScreenState extends State<MainNavScreen> {
         index: currentIndex,
         children: screens,
       ),
-      bottomNavigationBar: BottomNavigationBar(
+      bottomNavigationBar: CustomBottomNavBar(
         currentIndex: currentIndex,
         onTap: (index) {
           setState(() => currentIndex = index);
         },
-        backgroundColor: Colors.black,
-        selectedItemColor: Colors.redAccent,
-        unselectedItemColor: Colors.white54,
-        showSelectedLabels: true,
-        showUnselectedLabels: true,
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: "Home",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.chat_bubble_outline),
-            label: "Messages",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person_outline),
-            label: "Profile",
-          ),
-        ],
+        onLiveTap: _openGoLive,
       ),
     );
   }

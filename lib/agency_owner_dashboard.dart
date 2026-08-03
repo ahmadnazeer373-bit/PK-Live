@@ -3,9 +3,14 @@ import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-class AgencyOwnerDashboard extends StatelessWidget {
+class AgencyOwnerDashboard extends StatefulWidget {
   const AgencyOwnerDashboard({super.key});
 
+  @override
+  State<AgencyOwnerDashboard> createState() => _AgencyOwnerDashboardState();
+}
+
+class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
   User? get user => FirebaseAuth.instance.currentUser;
 
   Future<void> _approveHost(BuildContext context, DocumentSnapshot doc) async {
@@ -15,44 +20,54 @@ class AgencyOwnerDashboard extends StatelessWidget {
 
     try {
       final batch = FirebaseFirestore.instance.batch();
-
-      batch.update(doc.reference, {
-        'status': 'approved',
-        'reviewedAt': FieldValue.serverTimestamp(),
-      });
-
-      batch.update(FirebaseFirestore.instance.collection('users').doc(hostUid), {
-        'agencyId': agencyId,
-      });
-
+      batch.update(doc.reference, {'status': 'approved', 'reviewedAt': FieldValue.serverTimestamp()});
+      batch.update(FirebaseFirestore.instance.collection('users').doc(hostUid), {'agencyId': agencyId});
       await batch.commit();
 
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Host approve ho gaya")),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Host approved")));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Approve nahi ho saka: $e")),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Approve failed: $e")));
       }
     }
   }
 
   Future<void> _rejectHost(BuildContext context, DocumentSnapshot doc) async {
     try {
-      await doc.reference.update({
-        'status': 'rejected',
-        'reviewedAt': FieldValue.serverTimestamp(),
-      });
+      await doc.reference.update({'status': 'rejected', 'reviewedAt': FieldValue.serverTimestamp()});
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Reject nahi ho saka: $e")),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Reject failed: $e")));
       }
+    }
+  }
+
+  Future<void> _editAgencyName(String agencyId, String currentName) async {
+    final controller = TextEditingController(text: currentName);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1930),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Edit Agency Name", style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: controller,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(hintText: "Agency Name", hintStyle: TextStyle(color: Colors.white38)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel", style: TextStyle(color: Colors.white54))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text("Save", style: TextStyle(color: Colors.amberAccent)),
+          ),
+        ],
+      ),
+    );
+    if (newName != null && newName.isNotEmpty) {
+      await FirebaseFirestore.instance.collection('agencies').doc(agencyId).update({'agencyName': newName});
     }
   }
 
@@ -85,7 +100,7 @@ class AgencyOwnerDashboard extends StatelessWidget {
 
               if (ownedAgencyId == null) {
                 return const Center(
-                  child: Text("Aapki koi active agency nahi hai", style: TextStyle(color: Colors.white38)),
+                  child: Text("You don't have an active agency", style: TextStyle(color: Colors.white38)),
                 );
               }
 
@@ -102,14 +117,14 @@ class AgencyOwnerDashboard extends StatelessWidget {
                         ),
                         const SizedBox(width: 4),
                         const Text(
-                          "My Agency",
+                          "Agency Center",
                           style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
                     const SizedBox(height: 16),
 
-                    // ---------- Agency Card + Invite Code ----------
+                    // ---------- Agency Card ----------
                     StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance.collection('agencies').doc(ownedAgencyId).snapshots(),
                       builder: (context, agencySnap) {
@@ -144,15 +159,57 @@ class AgencyOwnerDashboard extends StatelessWidget {
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
-                                    child: Text(
-                                      agencyName,
-                                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                                      overflow: TextOverflow.ellipsis,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          agencyName,
+                                          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        Text(
+                                          "Agency ID: $ownedAgencyId",
+                                          style: const TextStyle(color: Colors.white38, fontSize: 11),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 14),
+                              const SizedBox(height: 16),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: () => _editAgencyName(ownedAgencyId, agencyName),
+                                      icon: const Icon(Icons.edit_outlined, color: Colors.white70, size: 16),
+                                      label: const Text("Edit Profile", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                      style: OutlinedButton.styleFrom(
+                                        side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: () {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text("Set Rooms \u2014 coming soon")),
+                                        );
+                                      },
+                                      icon: const Icon(Icons.meeting_room_outlined, color: Colors.white70, size: 16),
+                                      label: const Text("Set Rooms", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                      style: OutlinedButton.styleFrom(
+                                        side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
                               const Text("Invite Code", style: TextStyle(color: Colors.white54, fontSize: 12)),
                               const SizedBox(height: 6),
                               Row(
@@ -181,7 +238,7 @@ class AgencyOwnerDashboard extends StatelessWidget {
                                       onPressed: () {
                                         Clipboard.setData(ClipboardData(text: inviteCode));
                                         ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(content: Text("Invite code copy ho gaya")),
+                                          const SnackBar(content: Text("Invite code copied")),
                                         );
                                       },
                                     ),
@@ -190,6 +247,88 @@ class AgencyOwnerDashboard extends StatelessWidget {
                               ),
                             ],
                           ),
+                        );
+                      },
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    // ---------- Team Income Card ----------
+                    StreamBuilder<QuerySnapshot>(
+                      stream: FirebaseFirestore.instance
+                          .collection('users')
+                          .where('agencyId', isEqualTo: ownedAgencyId)
+                          .snapshots(),
+                      builder: (context, hostsSnap) {
+                        final hostDocs = hostsSnap.data?.docs ?? [];
+                        final hostUids = hostDocs.map((d) => d.id).toList();
+                        final now = DateTime.now();
+                        final monthStart = DateTime(now.year, now.month, 1);
+
+                        return StreamBuilder<QuerySnapshot>(
+                          // Note: Firestore 'whereIn' supports up to 30 values — fine for
+                          // small/medium agencies. For larger agencies this query will
+                          // need pagination or a server-side aggregation later.
+                          stream: hostUids.isEmpty
+                              ? const Stream.empty()
+                              : FirebaseFirestore.instance
+                                  .collection('gift_transactions')
+                                  .where('receiverUid', whereIn: hostUids.take(30).toList())
+                                  .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(monthStart))
+                                  .snapshots(),
+                          builder: (context, txnSnap) {
+                            final teamIncome = (txnSnap.data?.docs ?? [])
+                                .fold<int>(0, (sum, d) => sum + ((d.get('coinPrice') as num).toInt()));
+
+                            return Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(colors: [Color(0xFF2E7BFF), Color(0xFF6A5CFF)]),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      const Text("Team Income (This Month)",
+                                          style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500)),
+                                      const Icon(Icons.chevron_right, color: Colors.white54, size: 20),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.monetization_on, color: Colors.amberAccent, size: 20),
+                                      const SizedBox(width: 6),
+                                      Text("$teamIncome",
+                                          style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 14),
+                                  const Row(
+                                    children: [
+                                      Expanded(
+                                        child: _MiniInfo(label: "Commission", value: "Not set"),
+                                      ),
+                                      Expanded(
+                                        child: _MiniInfo(label: "Invite Bonus", value: "Not set"),
+                                      ),
+                                    ],
+                                  ),
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 6),
+                                    child: Text(
+                                      "Commission % and Invite Bonus rules are still being finalized",
+                                      style: TextStyle(color: Colors.white54, fontSize: 10),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
                         );
                       },
                     ),
@@ -224,46 +363,111 @@ class AgencyOwnerDashboard extends StatelessWidget {
                               return false;
                             }).length;
 
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
+                            return StreamBuilder<QuerySnapshot>(
+                              stream: FirebaseFirestore.instance
+                                  .collection('host_join_requests')
+                                  .where('agencyId', isEqualTo: ownedAgencyId)
+                                  .where('status', isEqualTo: 'pending')
+                                  .snapshots(),
+                              builder: (context, pendingSnap) {
+                                final pendingCount = pendingSnap.data?.docs.length ?? 0;
+
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Icon(Icons.groups_2_outlined, color: Colors.white70, size: 18),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      "Total Hosts: $totalHosts",
-                                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                                    Row(
+                                      children: [
+                                        const Icon(Icons.groups_2_outlined, color: Colors.white70, size: 18),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          "Total Hosts: $totalHosts",
+                                          style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 14),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: _StatSquare(
+                                            icon: Icons.verified_user_outlined,
+                                            iconColor: Colors.greenAccent,
+                                            value: '$totalHosts',
+                                            label: 'Active Hosts',
+                                          ),
+                                        ),
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: _StatSquare(
+                                            icon: Icons.fiber_new_outlined,
+                                            iconColor: Colors.amberAccent,
+                                            value: '$newHosts',
+                                            label: 'New This Week',
+                                          ),
+                                        ),
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: _StatSquare(
+                                            icon: Icons.hourglass_top_outlined,
+                                            iconColor: Colors.orangeAccent,
+                                            value: '$pendingCount',
+                                            label: 'Pending',
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ],
-                                ),
-                                const SizedBox(height: 14),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: _StatSquare(
-                                        icon: Icons.verified_user_outlined,
-                                        iconColor: Colors.greenAccent,
-                                        value: '$totalHosts',
-                                        label: 'Active Hosts',
-                                      ),
-                                    ),
-                                    const SizedBox(width: 14),
-                                    Expanded(
-                                      child: _StatSquare(
-                                        icon: Icons.fiber_new_outlined,
-                                        iconColor: Colors.amberAccent,
-                                        value: '$newHosts',
-                                        label: 'New This Week',
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
+                                );
+                              },
                             );
                           },
                         );
                       },
+                    ),
+
+                    const SizedBox(height: 22),
+
+                    // ---------- Invite Host / Host Apply ----------
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              // Reuses the invite code shown above; the copy button
+                              // there is the actual "invite" action for now.
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text("Copy the invite code above and send it to hosts")),
+                              );
+                            },
+                            icon: const Icon(Icons.person_add_alt, size: 18),
+                            label: const Text("Invite Host"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.white.withOpacity(0.08),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text("Pending requests are in the list below")),
+                              );
+                            },
+                            icon: const Icon(Icons.how_to_reg_outlined, size: 18),
+                            label: const Text("Host Apply"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amberAccent,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
 
                     const SizedBox(height: 26),
@@ -288,7 +492,7 @@ class AgencyOwnerDashboard extends StatelessWidget {
                         if (docs.isEmpty) {
                           return const Padding(
                             padding: EdgeInsets.symmetric(vertical: 20),
-                            child: Text("Koi pending request nahi", style: TextStyle(color: Colors.white38)),
+                            child: Text("No pending requests", style: TextStyle(color: Colors.white38)),
                           );
                         }
 
@@ -342,6 +546,23 @@ class AgencyOwnerDashboard extends StatelessWidget {
                         );
                       },
                     ),
+
+                    const SizedBox(height: 26),
+
+                    // ---------- Agency Academy ----------
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text("Agency Academy", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                        Text("See more", style: TextStyle(color: Colors.amberAccent.withOpacity(0.9), fontSize: 13)),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    const _AcademyItem(text: "How to recruit hosts?"),
+                    const _AcademyItem(text: "How to train hosts?"),
+                    const _AcademyItem(text: "How to build good relationships with supporters?"),
+                    const _AcademyItem(text: "How to build agency organizational structure"),
+
                     const SizedBox(height: 20),
                   ],
                 ),
@@ -354,25 +575,37 @@ class AgencyOwnerDashboard extends StatelessWidget {
   }
 }
 
+class _MiniInfo extends StatelessWidget {
+  final String label;
+  final String value;
+  const _MiniInfo({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+      ],
+    );
+  }
+}
+
 class _StatSquare extends StatelessWidget {
   final IconData icon;
   final Color iconColor;
   final String value;
   final String label;
 
-  const _StatSquare({
-    required this.icon,
-    required this.iconColor,
-    required this.value,
-    required this.label,
-  });
+  const _StatSquare({required this.icon, required this.iconColor, required this.value, required this.label});
 
   @override
   Widget build(BuildContext context) {
     return AspectRatio(
       aspectRatio: 1,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [Colors.white.withOpacity(0.10), Colors.white.withOpacity(0.03)],
@@ -387,23 +620,35 @@ class _StatSquare extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: iconColor.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, color: iconColor, size: 20),
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(color: iconColor.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, color: iconColor, size: 18),
             ),
-            Text(
-              value,
-              style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold),
-            ),
-            Text(
-              label,
-              style: const TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.w500),
-            ),
+            Text(value, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+            Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10, fontWeight: FontWeight.w500)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _AcademyItem extends StatelessWidget {
+  final String text;
+  const _AcademyItem({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+      child: Row(
+        children: [
+          const Icon(Icons.play_circle_outline, color: Colors.amberAccent, size: 18),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text, style: const TextStyle(color: Colors.white70, fontSize: 13))),
+        ],
       ),
     );
   }

@@ -68,13 +68,13 @@ class _AgencyApplicationScreenState extends State<AgencyApplicationScreen> {
         mobileController.text.trim().isEmpty ||
         emailController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Sab fields fill karein")),
+        const SnackBar(content: Text("Fill in all fields")),
       );
       return;
     }
     if (_selfieImage == null || _cnicFrontImage == null || _cnicBackImage == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Selfie aur CNIC (front + back) upload karein")),
+        const SnackBar(content: Text("Upload selfie and CNIC (front + back)")),
       );
       return;
     }
@@ -103,12 +103,12 @@ class _AgencyApplicationScreenState extends State<AgencyApplicationScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Application submit ho gayi — review ka intezar karein")),
+        const SnackBar(content: Text("Application submitted — awaiting review")),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Submit nahi ho saka: $e")),
+        SnackBar(content: Text("Couldn't submit: $e")),
       );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -162,7 +162,7 @@ class _AgencyApplicationScreenState extends State<AgencyApplicationScreen> {
                   icon: Icons.hourglass_top,
                   color: Colors.amberAccent,
                   title: "Application Under Review",
-                  subtitle: "Aapki agency application review mein hai. Approve hote hi aapko notify kar diya jayega.",
+                  subtitle: "Your agency application is under review. You'll be notified as soon as it's approved.",
                 );
               }
 
@@ -171,7 +171,7 @@ class _AgencyApplicationScreenState extends State<AgencyApplicationScreen> {
                   icon: Icons.verified,
                   color: Colors.greenAccent,
                   title: "Agency Approved!",
-                  subtitle: "Mubarak ho — aapki agency \"${data?['agencyName'] ?? ''}\" approve ho chuki hai. Apna invite code \"My Agency\" section mein dekhein.",
+                  subtitle: "Congratulations — your agency \"${data?['agencyName'] ?? ''}\" has been approved. Check your invite code in the \"My Agency\" section.",
                 );
               }
 
@@ -182,8 +182,8 @@ class _AgencyApplicationScreenState extends State<AgencyApplicationScreen> {
                   color: Colors.redAccent,
                   title: "Application Rejected",
                   subtitle: reason != null && reason.isNotEmpty
-                      ? "Wajah: $reason"
-                      : "Aapki application reject ho gayi hai.",
+                      ? "Reason: $reason"
+                      : "Your application has been rejected.",
                   showReapply: true,
                   onReapply: () => _resetForReapply(uid),
                 );
@@ -212,7 +212,7 @@ class _AgencyApplicationScreenState extends State<AgencyApplicationScreen> {
                     const Padding(
                       padding: EdgeInsets.only(left: 4),
                       child: Text(
-                        "Documents aur details submit karein — hum jald review karenge",
+                        "Submit your documents and details — we'll review them soon",
                         style: TextStyle(color: Colors.white54, fontSize: 13),
                       ),
                     ),
@@ -400,7 +400,7 @@ class _AgencyApplicationScreenState extends State<AgencyApplicationScreen> {
             if (showReapply)
               TextButton(
                 onPressed: onReapply,
-                child: const Text("Dobara Apply Karein", style: TextStyle(color: Colors.amberAccent)),
+                child: const Text("Apply Again", style: TextStyle(color: Colors.amberAccent)),
               ),
             TextButton(
               onPressed: () => Navigator.pop(context),

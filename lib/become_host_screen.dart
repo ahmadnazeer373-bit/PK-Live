@@ -62,7 +62,7 @@ class BecomeHostScreen extends StatelessWidget {
                     const Padding(
                       padding: EdgeInsets.only(left: 4),
                       child: Text(
-                        "Live host banne ke liye kisi agency ko join karna zaroori hai",
+                        "You need to join an agency to become a live host",
                         style: TextStyle(color: Colors.white54, fontSize: 13),
                       ),
                     ),
@@ -72,7 +72,7 @@ class BecomeHostScreen extends StatelessWidget {
                       _infoBanner(
                         icon: Icons.verified,
                         color: Colors.greenAccent,
-                        text: "Aap already ek agency ke host hain — Go Live ready!",
+                        text: "You're already a host with an agency — ready to Go Live!",
                       ),
                       const SizedBox(height: 20),
                     ],
@@ -83,7 +83,7 @@ class BecomeHostScreen extends StatelessWidget {
                         icon: Icons.leaderboard_outlined,
                         color: Colors.tealAccent,
                         title: "Host Dashboard",
-                        subtitle: "Apni earnings, coins aur activity dekhein",
+                        subtitle: "View your earnings, coins, and activity",
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(builder: (context) => const HostCenterScreen()),
@@ -98,7 +98,7 @@ class BecomeHostScreen extends StatelessWidget {
                         icon: Icons.dashboard_customize_outlined,
                         color: Colors.amberAccent,
                         title: "My Agency Dashboard",
-                        subtitle: "Apna invite code dekhein aur host requests approve karein",
+                        subtitle: "View your invite code and approve host requests",
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(builder: (context) => const AgencyOwnerDashboard()),
@@ -111,7 +111,7 @@ class BecomeHostScreen extends StatelessWidget {
                         icon: Icons.business_center_outlined,
                         color: Colors.amberAccent,
                         title: "Create Your Own Agency",
-                        subtitle: "Documents submit karein aur apni agency ke owner banein",
+                        subtitle: "Submit documents and become the owner of your own agency",
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(builder: (context) => const AgencyApplicationScreen()),
@@ -126,7 +126,7 @@ class BecomeHostScreen extends StatelessWidget {
                         icon: Icons.group_add_outlined,
                         color: Colors.tealAccent,
                         title: "Join an Agency",
-                        subtitle: "Kisi agency owner ka invite code dal kar host bane",
+                        subtitle: "Enter an agency owner's invite code to become a host",
                         onTap: () => Navigator.push(
                           context,
                           MaterialPageRoute(builder: (context) => const JoinAgencyScreen()),

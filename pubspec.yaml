@@ -44,6 +44,9 @@ dependencies:
   # Image picking - used to select cover photo from gallery
   image_picker: ^1.1.2
 
+  # Image cropping - used in edit profile screen
+  image_cropper: ^8.1.0
+
   # HTTP requests - used for Cloudinary image uploads
   http: ^1.2.2
 
@@ -59,6 +62,9 @@ dependencies:
 
   # Country picker - used in complete profile screen
   country_picker: ^2.0.26
+
+  # Date formatting - used in income detail screen
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:

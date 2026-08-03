@@ -74,20 +74,20 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
     if (uid == null) return;
 
     if (nameController.text.trim().isEmpty) {
-      _showError("Name likhein");
+      _showError("Enter your name");
       return;
     }
     final age = int.tryParse(ageController.text.trim());
     if (age == null || age <= 0) {
-      _showError("Sahi age likhein");
+      _showError("Enter a valid age");
       return;
     }
     if (selectedGender == null) {
-      _showError("Gender select karein");
+      _showError("Select your gender");
       return;
     }
     if (selectedCountry == null) {
-      _showError("Country select karein");
+      _showError("Select your country");
       return;
     }
 
@@ -107,7 +107,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
         (route) => false,
       );
     } catch (e) {
-      _showError("Save nahi ho saka: $e");
+      _showError("Couldn't save: $e");
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -168,7 +168,7 @@ class _CompleteProfileScreenState extends State<CompleteProfileScreen> {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  "Bas kuch details aur — phir aap ready hain",
+                  "Just a few more details — then you're ready",
                   style: TextStyle(color: Colors.white54, fontSize: 14),
                 ),
                 const SizedBox(height: 26),

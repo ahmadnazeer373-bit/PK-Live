@@ -1,6 +1,17 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:image_cropper/image_cropper.dart';
+import 'package:http/http.dart' as http;
+
+// Cloudinary — unsigned upload (mobile app se seedha, bina secret key ke).
+// Dashboard: https://console.cloudinary.com -> Settings -> Upload ->
+// Upload presets -> Add upload preset -> Signing Mode: "Unsigned".
+const String _cloudinaryCloudName = "bmdl7tkd";
+const String _cloudinaryUploadPreset = "euhkghkc";
 
 const List<String> avatarOptions = [
   "🧑", "👨", "👩", "👨‍💻", "👩‍🎤", "👑",
@@ -28,7 +39,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   bool isSaving = false;
 
   String avatar = "🧑";
+  String? avatarUrl;
   int coverIndex = 0;
+  String? coverPhotoUrl;
+  bool isUploadingAvatar = false;
+  bool isUploadingCover = false;
   String nickname = "";
   String birthdate = "";
   String personalNote = "";
@@ -60,7 +75,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     setState(() {
       avatar = data['avatar'] ?? "🧑";
+      avatarUrl = data['avatarUrl'] as String?;
       coverIndex = data['coverIndex'] ?? 0;
+      coverPhotoUrl = data['coverPhotoUrl'] as String?;
       nickname = data['name'] ?? "";
       birthdate = data['birthdate'] ?? "";
       personalNote = data['bio'] ?? "";
@@ -79,7 +96,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
     await FirebaseFirestore.instance.collection('users').doc(uid).set({
       'avatar': avatar,
+      'avatarUrl': avatarUrl,
       'coverIndex': coverIndex,
+      'coverPhotoUrl': coverPhotoUrl,
       'name': nickname,
       'birthdate': birthdate,
       'bio': personalNote,
@@ -95,28 +114,151 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
+  Future<String?> _cropImage(String sourcePath, {required bool isSquare}) async {
+    final cropped = await ImageCropper().cropImage(
+      sourcePath: sourcePath,
+      compressQuality: 85,
+      aspectRatio: isSquare
+          ? const CropAspectRatio(ratioX: 1, ratioY: 1)
+          : const CropAspectRatio(ratioX: 3, ratioY: 1),
+      uiSettings: [
+        AndroidUiSettings(
+          toolbarTitle: isSquare ? "Adjust Profile Photo" : "Adjust Cover Photo",
+          toolbarColor: const Color(0xFF1A1A2E),
+          toolbarWidgetColor: Colors.white,
+          backgroundColor: const Color(0xFF12121F),
+          lockAspectRatio: true,
+        ),
+        IOSUiSettings(
+          title: isSquare ? "Adjust Profile Photo" : "Adjust Cover Photo",
+          aspectRatioLockEnabled: true,
+        ),
+        WebUiSettings(
+          context: context,
+          presentStyle: WebPresentStyle.dialog,
+        ),
+      ],
+    );
+    return cropped?.path;
+  }
+
+  Future<String?> _uploadToCloudinary(String filePath) async {
+    try {
+      final url = Uri.parse("https://api.cloudinary.com/v1_1/$_cloudinaryCloudName/image/upload");
+      final bytes = await File(filePath).readAsBytes();
+      final request = http.MultipartRequest('POST', url)
+        ..fields['upload_preset'] = _cloudinaryUploadPreset
+        ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filePath.split('/').last));
+
+      final streamedResponse = await request.send();
+      final responseBody = await streamedResponse.stream.bytesToString();
+
+      if (streamedResponse.statusCode == 200) {
+        final data = jsonDecode(responseBody) as Map<String, dynamic>;
+        return data['secure_url'] as String?;
+      } else {
+        debugPrint("Cloudinary upload failed: ${streamedResponse.statusCode} $responseBody");
+        return null;
+      }
+    } catch (e) {
+      debugPrint("Cloudinary upload error: $e");
+      return null;
+    }
+  }
+
+  Future<void> _pickAvatarFromGallery() async {
+    Navigator.pop(context); // bottom sheet band karein
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 90);
+    if (picked == null) return;
+    if (!mounted) return;
+
+    final croppedPath = await _cropImage(picked.path, isSquare: true);
+    if (croppedPath == null) return; // user ne crop cancel kar diya
+
+    setState(() => isUploadingAvatar = true);
+    final url = await _uploadToCloudinary(croppedPath);
+    if (!mounted) return;
+
+    setState(() {
+      isUploadingAvatar = false;
+      if (url != null) avatarUrl = url;
+    });
+
+    if (url == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Photo upload failed, please try again")),
+      );
+    }
+  }
+
+  Future<void> _pickCoverFromGallery() async {
+    Navigator.pop(context); // bottom sheet band karein
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 90);
+    if (picked == null) return;
+    if (!mounted) return;
+
+    final croppedPath = await _cropImage(picked.path, isSquare: false);
+    if (croppedPath == null) return; // user ne crop cancel kar diya
+
+    setState(() => isUploadingCover = true);
+    final url = await _uploadToCloudinary(croppedPath);
+    if (!mounted) return;
+
+    setState(() {
+      isUploadingCover = false;
+      if (url != null) coverPhotoUrl = url;
+    });
+
+    if (url == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Cover photo upload failed, please try again")),
+      );
+    }
+  }
+
   void _pickAvatar() {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1A1A2E),
       builder: (context) => Padding(
         padding: const EdgeInsets.all(20),
-        child: Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          children: avatarOptions.map((emoji) {
-            return GestureDetector(
-              onTap: () {
-                setState(() => avatar = emoji);
-                Navigator.pop(context);
-              },
-              child: CircleAvatar(
-                radius: 28,
-                backgroundColor: Colors.white10,
-                child: Text(emoji, style: const TextStyle(fontSize: 26)),
-              ),
-            );
-          }).toList(),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.photo_library_outlined, color: Colors.redAccent),
+              title: const Text("Choose photo from gallery", style: TextStyle(color: Colors.white)),
+              onTap: _pickAvatarFromGallery,
+            ),
+            const Divider(color: Colors.white12),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6),
+              child: Text("Or choose an emoji avatar", style: TextStyle(color: Colors.white38, fontSize: 12)),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 16,
+              runSpacing: 16,
+              children: avatarOptions.map((emoji) {
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      avatar = emoji;
+                      avatarUrl = null; // emoji chunne par photo hata dein
+                    });
+                    Navigator.pop(context);
+                  },
+                  child: CircleAvatar(
+                    radius: 28,
+                    backgroundColor: Colors.white10,
+                    child: Text(emoji, style: const TextStyle(fontSize: 26)),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
         ),
       ),
     );
@@ -128,29 +270,50 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       backgroundColor: const Color(0xFF1A1A2E),
       builder: (context) => Padding(
         padding: const EdgeInsets.all(20),
-        child: Wrap(
-          spacing: 14,
-          runSpacing: 14,
-          children: List.generate(coverOptions.length, (index) {
-            final colors = coverOptions[index];
-            return GestureDetector(
-              onTap: () {
-                setState(() => coverIndex = index);
-                Navigator.pop(context);
-              },
-              child: Container(
-                width: 70,
-                height: 45,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: colors),
-                  borderRadius: BorderRadius.circular(10),
-                  border: coverIndex == index
-                      ? Border.all(color: Colors.white, width: 2)
-                      : null,
-                ),
-              ),
-            );
-          }),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.photo_library_outlined, color: Colors.redAccent),
+              title: const Text("Choose cover photo from gallery", style: TextStyle(color: Colors.white)),
+              onTap: _pickCoverFromGallery,
+            ),
+            const Divider(color: Colors.white12),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6),
+              child: Text("Or choose a gradient", style: TextStyle(color: Colors.white38, fontSize: 12)),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 14,
+              runSpacing: 14,
+              children: List.generate(coverOptions.length, (index) {
+                final colors = coverOptions[index];
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      coverIndex = index;
+                      coverPhotoUrl = null; // gradient chunne par photo hata dein
+                    });
+                    Navigator.pop(context);
+                  },
+                  child: Container(
+                    width: 70,
+                    height: 45,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: colors),
+                      borderRadius: BorderRadius.circular(10),
+                      border: coverIndex == index && coverPhotoUrl == null
+                          ? Border.all(color: Colors.white, width: 2)
+                          : null,
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ],
         ),
       ),
     );
@@ -296,65 +459,86 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       body: SingleChildScrollView(
         child: Column(
           children: [
-            Stack(
-              children: [
-                Container(
-                  height: 130,
-                  width: double.infinity,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: coverOptions[coverIndex]),
-                  ),
-                ),
-                Positioned(
-                  bottom: 10,
-                  left: 16,
-                  child: GestureDetector(
-                    onTap: _pickCover,
-                    child: Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(
-                        color: Colors.black45,
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  bottom: -35,
-                  left: 20,
-                  child: GestureDetector(
-                    onTap: _pickAvatar,
-                    child: Stack(
-                      children: [
-                        CircleAvatar(
-                          radius: 40,
-                          backgroundColor: const Color(0xFF12121F),
-                          child: CircleAvatar(
-                            radius: 36,
-                            backgroundColor: Colors.white10,
-                            child: Text(avatar, style: const TextStyle(fontSize: 34)),
-                          ),
-                        ),
-                        Positioned(
-                          right: 0,
-                          bottom: 0,
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: const BoxDecoration(
-                              color: Colors.redAccent,
-                              shape: BoxShape.circle,
+            SizedBox(
+              height: 130,
+              width: double.infinity,
+              child: Stack(
+                children: [
+                  Container(
+                    height: 130,
+                    width: double.infinity,
+                    decoration: coverPhotoUrl != null
+                        ? BoxDecoration(
+                            image: DecorationImage(
+                              image: NetworkImage(coverPhotoUrl!),
+                              fit: BoxFit.cover,
                             ),
-                            child: const Icon(Icons.camera_alt, color: Colors.white, size: 14),
+                          )
+                        : BoxDecoration(
+                            gradient: LinearGradient(colors: coverOptions[coverIndex]),
                           ),
+                    child: isUploadingCover
+                        ? const Center(
+                            child: CircularProgressIndicator(color: Colors.white),
+                          )
+                        : null,
+                  ),
+                  Positioned(
+                    top: 10,
+                    right: 16,
+                    child: GestureDetector(
+                      onTap: isUploadingCover ? null : _pickCover,
+                      child: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: const BoxDecoration(
+                          color: Colors.black45,
+                          shape: BoxShape.circle,
                         ),
-                      ],
+                        child: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-            const SizedBox(height: 50),
+            const SizedBox(height: 20),
+            Center(
+              child: GestureDetector(
+                onTap: isUploadingAvatar ? null : _pickAvatar,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    CircleAvatar(
+                      radius: 40,
+                      backgroundColor: const Color(0xFF12121F),
+                      child: CircleAvatar(
+                        radius: 36,
+                        backgroundColor: Colors.white10,
+                        backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl!) : null,
+                        child: isUploadingAvatar
+                            ? const CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                            : (avatarUrl == null
+                                ? Text(avatar, style: const TextStyle(fontSize: 34))
+                                : null),
+                      ),
+                    ),
+                    Positioned(
+                      right: -2,
+                      bottom: -2,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: const BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.camera_alt, color: Colors.white, size: 14),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 24),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(

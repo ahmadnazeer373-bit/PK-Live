@@ -22,7 +22,7 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
     final code = _codeController.text.trim();
     if (code.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Invite code dalein")),
+        const SnackBar(content: Text("Enter an invite code")),
       );
       return;
     }
@@ -35,7 +35,7 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
       if (!agencyDoc.exists) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Ye invite code sahi nahi hai")),
+          const SnackBar(content: Text("This invite code isn't valid")),
         );
         return;
       }
@@ -44,7 +44,7 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
       if (agencyData['status'] != 'active') {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Ye agency abhi active nahi hai")),
+          const SnackBar(content: Text("This agency isn't active right now")),
         );
         return;
       }
@@ -59,12 +59,12 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Request bhej di gayi — agency owner ki approval ka intezar karein")),
+        const SnackBar(content: Text("Request sent — waiting for the agency owner's approval")),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Bhejnay mein masla hua: $e")),
+        SnackBar(content: Text("Something went wrong while sending: $e")),
       );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
@@ -114,7 +114,7 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
                   icon: Icons.hourglass_top,
                   color: Colors.amberAccent,
                   title: "Request Pending",
-                  subtitle: "\"${data?['agencyName'] ?? ''}\" ko join karne ki request bheji gayi hai. Owner ki approval ka intezar karein.",
+                  subtitle: "Your request to join \"${data?['agencyName'] ?? ''}\" has been sent. Waiting for the owner's approval.",
                   showCancel: true,
                   onCancel: () => _cancelRequest(uid),
                 );
@@ -124,8 +124,8 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
                 return _statusView(
                   icon: Icons.verified,
                   color: Colors.greenAccent,
-                  title: "Agency Join Ho Gayi!",
-                  subtitle: "Aap \"${data?['agencyName'] ?? ''}\" ke host ban chuke hain — ab Go Live kar sakte hain.",
+                  title: "Agency Joined!",
+                  subtitle: "You're now a host of \"${data?['agencyName'] ?? ''}\" — you can Go Live now.",
                 );
               }
 
@@ -134,9 +134,9 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
                   icon: Icons.cancel,
                   color: Colors.redAccent,
                   title: "Request Rejected",
-                  subtitle: "Aapki join request reject ho gayi hai. Doosra invite code try karein.",
+                  subtitle: "Your join request was rejected. Try a different invite code.",
                   showCancel: true,
-                  cancelLabel: "Dobara Try Karein",
+                  cancelLabel: "Try Again",
                   onCancel: () => _cancelRequest(uid),
                 );
               }
@@ -164,7 +164,7 @@ class _JoinAgencyScreenState extends State<JoinAgencyScreen> {
                     const Padding(
                       padding: EdgeInsets.only(left: 4),
                       child: Text(
-                        "Agency owner se invite code lein aur yahan dalein",
+                        "Get an invite code from the agency owner and enter it here",
                         style: TextStyle(color: Colors.white54, fontSize: 13),
                       ),
                     ),

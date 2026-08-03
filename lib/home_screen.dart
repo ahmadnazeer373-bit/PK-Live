@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -29,22 +30,26 @@ class HomeScreen extends StatefulWidget {
 
 class LiveUser {
   final String id;
+  final String userID;
   final String name;
   final String image;
   final int viewers;
   final String flag;
   final String? tag;
   final num totalGifts;
+  final bool isLive;
   final List<Color> cardGradient;
 
   const LiveUser({
     required this.id,
+    required this.userID,
     required this.name,
     required this.image,
     required this.viewers,
     required this.flag,
     this.tag,
     required this.totalGifts,
+    required this.isLive,
     required this.cardGradient,
   });
 
@@ -52,6 +57,7 @@ class LiveUser {
     final data = doc.data() as Map<String, dynamic>? ?? {};
     return LiveUser(
       id: doc.id,
+      userID: (data['userID'] ?? "").toString(),
       name: data['name'] ?? "User",
       image: data['avatar'] ?? "🧑",
       viewers: (data['viewers'] ?? 0) is int
@@ -60,6 +66,7 @@ class LiveUser {
       flag: data['flag'] ?? "🌍",
       tag: data['tag'],
       totalGifts: (data['totalGifts'] ?? 0) as num,
+      isLive: data['isLive'] == true,
       cardGradient: _gradientPalette[index % _gradientPalette.length],
     );
   }
@@ -90,6 +97,15 @@ class _HomeScreenState extends State<HomeScreen> {
   bool isSearching = false;
   final TextEditingController searchController = TextEditingController();
 
+  // Search-by-User-ID (works across ALL users, not just the ones already
+  // loaded in the home feed — searches Firestore directly on the 'userID'
+  // field, which is a distinct sequential ID separate from the Firebase
+  // Auth uid used for the document's own id).
+  Timer? _idSearchDebounce;
+  LiveUser? _idSearchResult;
+  bool _idSearchLoading = false;
+  bool _idSearchedNotFound = false;
+
   Query<Map<String, dynamic>> get _baseQuery => FirebaseFirestore.instance
       .collection('users')
       .where('isLive', isEqualTo: true)
@@ -108,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _gridController.dispose();
     _bannerController.dispose();
     searchController.dispose();
+    _idSearchDebounce?.cancel();
     super.dispose();
   }
 
@@ -180,6 +197,43 @@ class _HomeScreenState extends State<HomeScreen> {
               .where((u) => u.name.toLowerCase().contains(query.toLowerCase()))
               .toList();
     });
+
+    _idSearchDebounce?.cancel();
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) {
+      setState(() {
+        _idSearchResult = null;
+        _idSearchedNotFound = false;
+        _idSearchLoading = false;
+      });
+      return;
+    }
+    _idSearchDebounce = Timer(const Duration(milliseconds: 400), () => _searchByUserId(trimmed));
+  }
+
+  Future<void> _searchByUserId(String userID) async {
+    setState(() {
+      _idSearchLoading = true;
+      _idSearchedNotFound = false;
+    });
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('users')
+          .where('userID', isEqualTo: userID)
+          .limit(1)
+          .get();
+
+      if (!mounted) return;
+      setState(() {
+        _idSearchResult = snap.docs.isNotEmpty ? LiveUser.fromDoc(snap.docs.first, 0) : null;
+        _idSearchedNotFound = snap.docs.isEmpty;
+      });
+    } catch (e) {
+      debugPrint("User ID search failed: $e");
+      if (mounted) setState(() => _idSearchedNotFound = true);
+    } finally {
+      if (mounted) setState(() => _idSearchLoading = false);
+    }
   }
 
   void _toggleSearch() {
@@ -188,8 +242,87 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!isSearching) {
         searchController.clear();
         filteredUsers = liveUsers;
+        _idSearchResult = null;
+        _idSearchedNotFound = false;
+        _idSearchLoading = false;
+        _idSearchDebounce?.cancel();
       }
     });
+  }
+
+  void _openSearchedUserProfile(LiveUser user) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A2E),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 30,
+                      backgroundColor: Colors.white.withOpacity(0.08),
+                      child: Text(user.image, style: const TextStyle(fontSize: 26)),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(user.name,
+                              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 3),
+                          Text("ID: ${user.userID}",
+                              style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: user.isLive ? Colors.redAccent : Colors.white12,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        user.isLive ? "LIVE" : "OFFLINE",
+                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: user.isLive ? Colors.redAccent : Colors.white12,
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: user.isLive
+                        ? () {
+                            Navigator.pop(context);
+                            openLiveRoom(context, user.name);
+                          }
+                        : null,
+                    child: Text(
+                      user.isLive ? "Join Live Room" : "This user isn't live right now",
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _showRankSheet() {
@@ -234,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 20),
               const Text(
-                "Live rooms mein active raho aur points kamao apna rank badhane ke liye.",
+                "Stay active in live rooms and earn points to boost your rank.",
                 style: TextStyle(color: Colors.white54, fontSize: 13),
               ),
               const SizedBox(height: 10),
@@ -243,6 +376,83 @@ class _HomeScreenState extends State<HomeScreen> {
         );
       },
     );
+  }
+
+  Widget _idSearchStatusBar() {
+    final query = searchController.text.trim();
+    if (query.isEmpty) return const SizedBox.shrink();
+
+    if (_idSearchLoading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 10),
+        child: Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(color: Colors.amberAccent, strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+
+    if (_idSearchResult != null) {
+      final user = _idSearchResult!;
+      return InkWell(
+        onTap: () => _openSearchedUserProfile(user),
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.amberAccent.withOpacity(0.4)),
+          ),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: Colors.white.withOpacity(0.08),
+                child: Text(user.image, style: const TextStyle(fontSize: 20)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(user.name,
+                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                    Text("ID: ${user.userID}",
+                        style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: user.isLive ? Colors.redAccent : Colors.white12,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  user.isLive ? "LIVE" : "OFFLINE",
+                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_idSearchedNotFound) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 10),
+        child: Center(
+          child: Text("No user found with this ID", style: TextStyle(color: Colors.white38, fontSize: 12)),
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 
   Widget _topBar() {
@@ -649,7 +859,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () {
               // TODO: wire this to your actual Go-Live flow/screen once it's built.
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Go Live flow abhi connect karna hai")),
+                const SnackBar(content: Text("Go Live flow isn't connected yet")),
               );
             },
           ),
@@ -677,6 +887,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _liveAvatarsRow(),
               const Divider(color: Colors.white12, height: 1),
             ],
+            if (isSearching) _idSearchStatusBar(),
             Expanded(
               child: _isLoadingInitial
                   ? _shimmerGrid()

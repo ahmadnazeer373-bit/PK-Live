@@ -103,7 +103,7 @@ class _SignupScreenState extends State<SignupScreen> {
     if (nameController.text.trim().isEmpty ||
         emailController.text.trim().isEmpty ||
         passwordController.text.trim().isEmpty) {
-      _showError("Sab fields fill karein");
+      _showError("Fill in all fields");
       return;
     }
 
@@ -116,7 +116,7 @@ class _SignupScreenState extends State<SignupScreen> {
       final isNewUser = await _ensureUserDoc(credential.user!, name: nameController.text.trim());
       _goToApp(isNewUser: isNewUser, name: nameController.text.trim());
     } on FirebaseAuthException catch (e) {
-      _showError(e.message ?? "Account nahi ban saka");
+      _showError(e.message ?? "Couldn't create account");
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -144,9 +144,9 @@ class _SignupScreenState extends State<SignupScreen> {
       final isNewUser = await _ensureUserDoc(userCredential.user!);
       _goToApp(isNewUser: isNewUser, name: userCredential.user!.displayName);
     } on FirebaseAuthException catch (e) {
-      _showError(e.message ?? "Google sign-in fail ho gaya");
+      _showError(e.message ?? "Google sign-in failed");
     } catch (e) {
-      _showError("Google sign-in fail ho gaya: $e");
+      _showError("Google sign-in failed: $e");
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -156,7 +156,7 @@ class _SignupScreenState extends State<SignupScreen> {
 
   Future<void> _sendOtp() async {
     if (nameController.text.trim().isEmpty || _fullPhoneNumber.trim().isEmpty) {
-      _showError("Naam aur phone number dono fill karein");
+      _showError("Fill in both name and phone number");
       return;
     }
 
@@ -176,7 +176,7 @@ class _SignupScreenState extends State<SignupScreen> {
           _goToApp(isNewUser: isNewUser, name: nameController.text.trim());
         },
         verificationFailed: (e) {
-          _showError(e.message ?? "Verification fail ho gayi");
+          _showError(e.message ?? "Verification failed");
           if (mounted) setState(() => isLoading = false);
         },
         codeSent: (verificationId, resendToken) {
@@ -191,14 +191,14 @@ class _SignupScreenState extends State<SignupScreen> {
         },
       );
     } catch (e) {
-      _showError("OTP bhejne mein masla hua: $e");
+      _showError("Something went wrong while sending the OTP: $e");
       if (mounted) setState(() => isLoading = false);
     }
   }
 
   Future<void> _verifyOtpAndCreateAccount() async {
     if (_verificationId == null || otpController.text.trim().isEmpty) {
-      _showError("OTP code fill karein");
+      _showError("Enter the OTP code");
       return;
     }
 
@@ -216,7 +216,7 @@ class _SignupScreenState extends State<SignupScreen> {
       );
       _goToApp(isNewUser: isNewUser, name: nameController.text.trim());
     } on FirebaseAuthException catch (e) {
-      _showError(e.message ?? "OTP verify nahi ho saka");
+      _showError(e.message ?? "Couldn't verify OTP");
     } finally {
       if (mounted) setState(() => isLoading = false);
     }

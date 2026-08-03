@@ -15,4 +15,14 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+
+    <!-- Required by the image_cropper plugin's crop screen (uCrop), which is
+         built on AppCompatActivity and crashes without an AppCompat-based
+         theme. This is a separate theme used ONLY for the crop screen — it
+         does not affect LaunchTheme/NormalTheme or the rest of the app. -->
+    <style name="Theme.AppCompat.Ucrop" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="colorPrimary">#1A1A2E</item>
+        <item name="colorPrimaryDark">#0D0B1E</item>
+        <item name="colorAccent">#FFD700</item>
+    </style>
 </resources>

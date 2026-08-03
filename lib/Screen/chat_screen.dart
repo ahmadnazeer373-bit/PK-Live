@@ -86,7 +86,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final myDoc = await FirebaseFirestore.instance.collection('users').doc(myUid).get();
     final myData = myDoc.data() ?? {};
-    final myName = (myData['name'] as String?) ?? FirebaseAuth.instance.currentUser!.email ?? "Me";
+    final myName = (myData['name'] as String?)?.trim().isNotEmpty == true
+        ? (myData['name'] as String).trim()
+        : "User";
     final myAvatar = myData['avatar'] as String?;
 
     final chatRef = FirebaseFirestore.instance.collection('chats').doc(chatId);
@@ -118,7 +120,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Message bhejne mein masla hua, dobara try karein")),
+          const SnackBar(content: Text("Couldn't send message, please try again")),
         );
       }
     }
@@ -160,8 +162,8 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF1A1730),
-        title: const Text("Message delete karein?", style: TextStyle(color: Colors.white)),
-        content: const Text("Ye sirf aapke liye delete hoga.", style: TextStyle(color: Colors.white70)),
+        title: const Text("Delete message?", style: TextStyle(color: Colors.white)),
+        content: const Text("This will only delete it for you.", style: TextStyle(color: Colors.white70)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -198,12 +200,19 @@ class _ChatScreenState extends State<ChatScreen> {
     return Container(
       width: size,
       height: size,
+      padding: EdgeInsets.all(size * 0.06),
       decoration: const BoxDecoration(
         shape: BoxShape.circle,
-        gradient: LinearGradient(colors: [Color(0xFFFF416C), Color(0xFFFF4B2B)]),
+        gradient: LinearGradient(colors: [Color(0xFFFF512F), Color(0xFFDD2476)]),
       ),
-      alignment: Alignment.center,
-      child: Text(emoji ?? "🧑", style: TextStyle(fontSize: size * 0.5)),
+      child: Container(
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Color(0xFF1A1A2E),
+        ),
+        alignment: Alignment.center,
+        child: Text(emoji ?? "🧑", style: TextStyle(fontSize: size * 0.46)),
+      ),
     );
   }
 
@@ -213,6 +222,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0B1E),
+      extendBodyBehindAppBar: false,
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(70),
         child: Container(
@@ -274,7 +284,15 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
       ),
-      body: SafeArea(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF120F26), Color(0xFF0D0B1E)],
+          ),
+        ),
+        child: SafeArea(
         child: Column(
           children: [
             Expanded(
@@ -289,7 +307,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 builder: (context, snapshot) {
                   if (snapshot.hasError) {
                     return const Center(
-                      child: Text("Messages load nahi ho sake", style: TextStyle(color: Colors.white54)),
+                      child: Text("Couldn't load messages", style: TextStyle(color: Colors.white54)),
                     );
                   }
 
@@ -309,7 +327,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           const Icon(Icons.chat_bubble_outline, color: Colors.white24, size: 56),
                           const SizedBox(height: 12),
                           const Text(
-                            "Abhi koi message nahi\nBaat shuru karein",
+                            "No messages yet\nStart the conversation",
                             textAlign: TextAlign.center,
                             style: TextStyle(color: Colors.white38),
                           ),
@@ -415,10 +433,15 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+              margin: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.03),
-                border: const Border(top: BorderSide(color: Colors.white10)),
+                color: Colors.white.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+                boxShadow: [
+                  BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 10, offset: const Offset(0, 4)),
+                ],
               ),
               child: Row(
                 children: [
@@ -426,7 +449,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     icon: const Icon(Icons.image_outlined, color: Colors.white54),
                     onPressed: () {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Image bhejna jald aa raha hai")),
+                        const SnackBar(content: Text("Image sending is coming soon")),
                       );
                     },
                   ),
@@ -439,7 +462,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       textCapitalization: TextCapitalization.sentences,
                       style: const TextStyle(color: Colors.white),
                       decoration: InputDecoration(
-                        hintText: "Message likhein...",
+                        hintText: "Type a message...",
                         hintStyle: const TextStyle(color: Colors.grey),
                         filled: true,
                         fillColor: Colors.white10,
@@ -463,7 +486,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
                             gradient: hasText
-                                ? const LinearGradient(colors: [Color(0xFFFF416C), Color(0xFFFF4B2B)])
+                                ? const LinearGradient(colors: [Color(0xFFFF512F), Color(0xFFDD2476)])
                                 : null,
                             color: hasText ? null : Colors.white10,
                           ),
@@ -480,6 +503,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );

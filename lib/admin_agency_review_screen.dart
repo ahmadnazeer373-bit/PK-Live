@@ -49,13 +49,13 @@ class AdminAgencyReviewScreen extends StatelessWidget {
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("$agencyName approve ho gayi")),
+          SnackBar(content: Text("$agencyName approved")),
         );
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Approve nahi ho saka: $e")),
+          SnackBar(content: Text("Approve failed: $e")),
         );
       }
     }
@@ -102,7 +102,7 @@ class AdminAgencyReviewScreen extends StatelessWidget {
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Reject nahi ho saka: $e")),
+          SnackBar(content: Text("Reject failed: $e")),
         );
       }
     }
@@ -144,7 +144,7 @@ class AdminAgencyReviewScreen extends StatelessWidget {
           final docs = snapshot.data!.docs;
           if (docs.isEmpty) {
             return const Center(
-              child: Text("Koi pending application nahi", style: TextStyle(color: Colors.white38)),
+              child: Text("No pending applications", style: TextStyle(color: Colors.white38)),
             );
           }
 

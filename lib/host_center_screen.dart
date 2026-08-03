@@ -1,15 +1,36 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'agency_owner_dashboard.dart';
+import 'wallet_screen.dart';
+import 'income_detail_screen.dart';
 
-/// Host Center — dashboard hosts ke liye: earnings, quick links, aur
-/// onboarding tips. Firestore field names assume kiye gaye hain
-/// (users/{uid}: monthlyIncome, coins, activeDays, watchMinutes) —
-/// apne actual schema ke mutabiq badal lein.
+// Level thresholds are based on lifetime totalGifts (coins earned from
+// gifts). Adjust these numbers to match your actual host-tier business
+// rules whenever they're finalized.
+const List<int> _levelThresholds = [0, 5000, 15000, 40000, 100000, 250000, 600000];
+
 class HostCenterScreen extends StatelessWidget {
   const HostCenterScreen({super.key});
 
   User? get user => FirebaseAuth.instance.currentUser;
+
+  ({int level, int currentInLevel, int neededForNext}) _computeLevel(int totalGifts) {
+    int level = 1;
+    for (int i = _levelThresholds.length - 1; i >= 0; i--) {
+      if (totalGifts >= _levelThresholds[i]) {
+        level = i + 1;
+        break;
+      }
+    }
+    final currentThreshold = _levelThresholds[level - 1];
+    final nextThreshold = level < _levelThresholds.length ? _levelThresholds[level] : currentThreshold;
+    return (
+      level: level,
+      currentInLevel: totalGifts - currentThreshold,
+      neededForNext: nextThreshold - currentThreshold,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,10 +58,12 @@ class HostCenterScreen extends StatelessWidget {
             stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
             builder: (context, snapshot) {
               final data = snapshot.data?.data() as Map<String, dynamic>?;
-              final monthlyIncome = (data?['monthlyIncome'] ?? 0).toString();
-              final coins = (data?['coins'] ?? 0).toString();
-              final activeDays = (data?['activeDays'] ?? 0).toString();
-              final watchMinutes = (data?['watchMinutes'] ?? 0).toString();
+              final coins = ((data?['coins'] ?? 0) as num).toInt();
+              final totalGifts = ((data?['totalGifts'] ?? 0) as num).toInt();
+              final levelInfo = _computeLevel(totalGifts);
+              final progress = levelInfo.neededForNext == 0
+                  ? 1.0
+                  : (levelInfo.currentInLevel / levelInfo.neededForNext).clamp(0.0, 1.0);
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -75,7 +98,10 @@ class HostCenterScreen extends StatelessWidget {
                             label: "My Agency",
                             color: const Color(0xFFFFB347),
                             onTap: () {
-                              // Navigator.push(context, MaterialPageRoute(builder: (_) => const AgencyOwnerDashboard()));
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (_) => const AgencyOwnerDashboard()),
+                              );
                             },
                           ),
                         ),
@@ -85,14 +111,19 @@ class HostCenterScreen extends StatelessWidget {
                             icon: Icons.account_balance_wallet_rounded,
                             label: "Wallet",
                             color: const Color(0xFF64D2FF),
-                            onTap: () {},
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(builder: (_) => const WalletScreen()),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: _QuickLink(
                             icon: Icons.shield_outlined,
-                            label: "Guidelines",
+                            label: "PK Live Policy",
                             color: const Color(0xFFFF6B9D),
                             onTap: () {},
                           ),
@@ -102,56 +133,78 @@ class HostCenterScreen extends StatelessWidget {
 
                     const SizedBox(height: 26),
 
-                    // ---------- Earnings Card ----------
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF7B2FF7), Color(0xFF3B1E7A)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(22),
-                        boxShadow: [
-                          BoxShadow(color: Colors.purple.withOpacity(0.25), blurRadius: 20, offset: const Offset(0, 8)),
-                        ],
+                    // ---------- Total Income Card ----------
+                    GestureDetector(
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const IncomeDetailScreen()),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text("This Month's Earnings",
-                                  style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
-                              const Icon(Icons.chevron_right, color: Colors.white54, size: 20),
-                            ],
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF7B2FF7), Color(0xFF3B1E7A)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
                           ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(6),
-                                decoration: const BoxDecoration(color: Colors.amberAccent, shape: BoxShape.circle),
-                                child: const Icon(Icons.monetization_on, color: Colors.deepPurple, size: 16),
+                          borderRadius: BorderRadius.circular(22),
+                          boxShadow: [
+                            BoxShadow(color: Colors.purple.withOpacity(0.25), blurRadius: 20, offset: const Offset(0, 8)),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text("Total Income",
+                                    style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+                                const Icon(Icons.chevron_right, color: Colors.white54, size: 20),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: const BoxDecoration(color: Colors.amberAccent, shape: BoxShape.circle),
+                                  child: const Icon(Icons.monetization_on, color: Colors.deepPurple, size: 16),
+                                ),
+                                const SizedBox(width: 8),
+                                Text("$totalGifts",
+                                    style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                            const SizedBox(height: 18),
+                            Divider(color: Colors.white.withOpacity(0.15), height: 1),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                _StatItem(label: "Coin Balance", value: "$coins"),
+                                _StatItem(label: "Level", value: "Lv.${levelInfo.level}"),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: LinearProgressIndicator(
+                                value: progress,
+                                minHeight: 8,
+                                backgroundColor: Colors.white.withOpacity(0.15),
+                                valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
                               ),
-                              const SizedBox(width: 8),
-                              Text(monthlyIncome,
-                                  style: const TextStyle(color: Colors.white, fontSize: 26, fontWeight: FontWeight.bold)),
-                            ],
-                          ),
-                          const SizedBox(height: 18),
-                          Divider(color: Colors.white.withOpacity(0.15), height: 1),
-                          const SizedBox(height: 16),
-                          Row(
-                            children: [
-                              _StatItem(label: "Coins", value: coins),
-                              _StatItem(label: "Active Days", value: activeDays),
-                              _StatItem(label: "Watch Time", value: "$watchMinutes min"),
-                            ],
-                          ),
-                        ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              levelInfo.neededForNext == 0
+                                  ? "Max level reached"
+                                  : "${levelInfo.neededForNext - levelInfo.currentInLevel} coins to reach Lv.${levelInfo.level + 1}",
+                              style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 11),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
 
@@ -192,9 +245,9 @@ class HostCenterScreen extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    _AcademyItem(text: "Getting started as a new host"),
-                    _AcademyItem(text: "Tips to grow your audience faster"),
-                    _AcademyItem(text: "What makes a top-rated host"),
+                    const _AcademyItem(text: "Getting started as a new host on PK Live"),
+                    const _AcademyItem(text: "Tips to grow your audience faster"),
+                    const _AcademyItem(text: "What makes a top-rated host"),
 
                     const SizedBox(height: 20),
                   ],
@@ -235,7 +288,7 @@ class _QuickLink extends StatelessWidget {
               child: Icon(icon, color: color, size: 20),
             ),
             const SizedBox(height: 8),
-            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w500)),
+            Text(label, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w500)),
           ],
         ),
       ),
