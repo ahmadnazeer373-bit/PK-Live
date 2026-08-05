@@ -30,15 +30,7 @@ class StatusScreen extends StatelessWidget {
             Text("Plaza", style: TextStyle(color: Colors.white)),
           ],
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add_circle_outline, color: Colors.white),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const CreatePostScreen()),
-            ),
-          ),
-        ],
+        actions: const [],
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance

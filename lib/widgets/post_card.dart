@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'comments_sheet.dart';
+// NOTE: adjust this relative path if your folder layout differs — this
+// assumes post_card.dart lives in widgets/ and create_post_screen.dart
+// lives in a sibling Screen/ folder (matching status_screen.dart's import).
+import '../Screen/create_post_screen.dart';
 
 class PostCard extends StatelessWidget {
   final QueryDocumentSnapshot doc;
@@ -94,6 +98,7 @@ class PostCard extends StatelessWidget {
                   context,
                   isOwner: isOwner,
                   caption: caption,
+                  imageUrls: imageUrls,
                 ),
               ),
             ],
@@ -170,6 +175,7 @@ class PostCard extends StatelessWidget {
     BuildContext context, {
     required bool isOwner,
     required String caption,
+    required List imageUrls,
   }) {
     showModalBottomSheet(
       context: context,
@@ -182,11 +188,20 @@ class PostCard extends StatelessWidget {
               if (isOwner) ...[
                 ListTile(
                   leading: const Icon(Icons.edit, color: Colors.white70),
-                  title: const Text("Edit caption",
+                  title: const Text("Edit post",
                       style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(sheetContext);
-                    _editCaption(context, caption);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CreatePostScreen(
+                          postId: doc.id,
+                          initialCaption: caption,
+                          initialImageUrls: List<String>.from(imageUrls),
+                        ),
+                      ),
+                    );
                   },
                 ),
                 ListTile(
@@ -212,41 +227,6 @@ class PostCard extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-
-  void _editCaption(BuildContext context, String currentCaption) {
-    final controller = TextEditingController(text: currentCaption);
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF1A0F2E),
-        title: const Text("Edit caption", style: TextStyle(color: Colors.white)),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 4,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            filled: true,
-            fillColor: Colors.white10,
-            border: OutlineInputBorder(borderSide: BorderSide.none),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
-          ),
-          TextButton(
-            onPressed: () async {
-              await doc.reference.update({'caption': controller.text.trim()});
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-            },
-            child: const Text("Save", style: TextStyle(color: Colors.pinkAccent)),
-          ),
-        ],
-      ),
     );
   }
 

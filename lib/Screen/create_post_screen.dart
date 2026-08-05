@@ -16,7 +16,18 @@ const String _cloudinaryUploadPreset = "euhkghkc";
 // =========================================================
 
 class CreatePostScreen extends StatefulWidget {
-  const CreatePostScreen({super.key});
+  // When editing an existing post, pass its id + current data in. Leave
+  // these null for the normal "new post" flow.
+  final String? postId;
+  final String? initialCaption;
+  final List<String>? initialImageUrls;
+
+  const CreatePostScreen({
+    super.key,
+    this.postId,
+    this.initialCaption,
+    this.initialImageUrls,
+  });
 
   @override
   State<CreatePostScreen> createState() => _CreatePostScreenState();
@@ -25,7 +36,22 @@ class CreatePostScreen extends StatefulWidget {
 class _CreatePostScreenState extends State<CreatePostScreen> {
   final TextEditingController _captionController = TextEditingController();
   final List<XFile> _pickedImages = [];
+  // Images the post already had (only relevant in edit mode) — shown
+  // alongside newly picked ones; user can remove them before saving.
+  List<String> _existingImageUrls = [];
   bool _posting = false;
+  bool _deleting = false;
+
+  bool get _isEditing => widget.postId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialCaption != null) {
+      _captionController.text = widget.initialCaption!;
+    }
+    _existingImageUrls = List<String>.from(widget.initialImageUrls ?? []);
+  }
 
   Future<void> _pickImages() async {
     final images = await ImagePicker().pickMultiImage(imageQuality: 80);
@@ -59,41 +85,57 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
   Future<void> _submitPost() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || _posting) return;
-    if (_captionController.text.trim().isEmpty && _pickedImages.isEmpty) {
+    if (_captionController.text.trim().isEmpty &&
+        _pickedImages.isEmpty &&
+        _existingImageUrls.isEmpty) {
       return;
     }
 
     setState(() => _posting = true);
 
     try {
-      // Fetch current user's profile info for name/avatar/tier.
-      // TODO: adjust field names below to match your existing 'users' schema
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(user.uid)
-          .get();
-      final userData = userDoc.data() ?? {};
-
-      final List<String> imageUrls = [];
+      final List<String> newlyUploadedUrls = [];
       for (final img in _pickedImages) {
         final url = await _uploadToCloudinary(File(img.path));
-        imageUrls.add(url);
+        newlyUploadedUrls.add(url);
       }
+      final allImageUrls = [..._existingImageUrls, ...newlyUploadedUrls];
 
-      await FirebaseFirestore.instance.collection('plaza_posts').add({
-        'userId': user.uid,
-        'userName': userData['name'] ?? user.displayName ?? 'User',
-        'userAvatar': userData['avatarUrl'] ?? '',
-        'userAvatarEmoji': userData['avatar'] ?? '🧑',
-        'userTier': userData['tag'] ?? '',
-        'verified': userData['verified'] ?? false,
-        'caption': _captionController.text.trim(),
-        'imageUrls': imageUrls,
-        'likesCount': 0,
-        'likedBy': [],
-        'commentsCount': 0,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      if (_isEditing) {
+        // Editing an existing post — only update the fields the author can
+        // change; leave likes/comments/author info untouched.
+        await FirebaseFirestore.instance
+            .collection('plaza_posts')
+            .doc(widget.postId)
+            .update({
+          'caption': _captionController.text.trim(),
+          'imageUrls': allImageUrls,
+          'editedAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        // Fetch current user's profile info for name/avatar/tier.
+        // TODO: adjust field names below to match your existing 'users' schema
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(user.uid)
+            .get();
+        final userData = userDoc.data() ?? {};
+
+        await FirebaseFirestore.instance.collection('plaza_posts').add({
+          'userId': user.uid,
+          'userName': userData['name'] ?? user.displayName ?? 'User',
+          'userAvatar': userData['avatarUrl'] ?? '',
+          'userAvatarEmoji': userData['avatar'] ?? '🧑',
+          'userTier': userData['tag'] ?? '',
+          'verified': userData['verified'] ?? false,
+          'caption': _captionController.text.trim(),
+          'imageUrls': allImageUrls,
+          'likesCount': 0,
+          'likedBy': [],
+          'commentsCount': 0,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
 
       if (mounted) Navigator.pop(context);
     } catch (e) {
@@ -107,6 +149,50 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
     }
   }
 
+  Future<void> _deletePost() async {
+    if (!_isEditing || _deleting) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1930),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Post Delete Karein?", style: TextStyle(color: Colors.white)),
+        content: const Text(
+          "Ye post hamesha ke liye delete ho jayegi.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("Delete", style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _deleting = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection('plaza_posts')
+          .doc(widget.postId)
+          .delete();
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to delete: $e")),
+        );
+      }
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -114,8 +200,20 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       appBar: AppBar(
         backgroundColor: const Color(0xFF0D0518),
         elevation: 0,
-        title: const Text("New Post", style: TextStyle(color: Colors.white)),
+        title: Text(_isEditing ? "Edit Post" : "New Post",
+            style: const TextStyle(color: Colors.white)),
         actions: [
+          if (_isEditing)
+            IconButton(
+              onPressed: _deleting ? null : _deletePost,
+              icon: _deleting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.redAccent),
+                    )
+                  : const Icon(Icons.delete_outline, color: Colors.redAccent),
+            ),
           TextButton(
             onPressed: _posting ? null : _submitPost,
             child: _posting
@@ -124,8 +222,8 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Text("Post",
-                    style: TextStyle(
+                : Text(_isEditing ? "Update" : "Create",
+                    style: const TextStyle(
                         color: Colors.pinkAccent,
                         fontWeight: FontWeight.bold)),
           ),
@@ -156,15 +254,64 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
               spacing: 8,
               runSpacing: 8,
               children: [
+                ..._existingImageUrls.map(
+                  (url) => Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Image.network(
+                          url,
+                          width: 90,
+                          height: 90,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: GestureDetector(
+                          onTap: () => setState(() => _existingImageUrls.remove(url)),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.black54,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, color: Colors.white, size: 14),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 ..._pickedImages.map(
-                  (img) => ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: Image.file(
-                      File(img.path),
-                      width: 90,
-                      height: 90,
-                      fit: BoxFit.cover,
-                    ),
+                  (img) => Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Image.file(
+                          File(img.path),
+                          width: 90,
+                          height: 90,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: GestureDetector(
+                          onTap: () => setState(() => _pickedImages.remove(img)),
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: const BoxDecoration(
+                              color: Colors.black54,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, color: Colors.white, size: 14),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 GestureDetector(

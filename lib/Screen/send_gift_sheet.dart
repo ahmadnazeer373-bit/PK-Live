@@ -5,7 +5,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// Opens a bottom sheet listing gifts from the catalog. Tapping one sends
 /// it to [receiverUid], deducting coins from the sender and crediting
 /// totalGifts to the receiver (used for home-screen top-gifted ranking).
-Future<void> showSendGiftSheet(BuildContext context, String? receiverUid, [String? receiverName]) async {
+///
+/// If [roomId] is provided, a "X sent Y a 🎁 Gift" line is also posted into
+/// that party room's chat (party_rooms/{roomId}/messages) after the gift
+/// goes through.
+Future<void> showSendGiftSheet(BuildContext context, String? receiverUid, [String? receiverName, String? roomId]) async {
   if (receiverUid == null) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text("Is room ka host abhi set nahi hai")),
@@ -17,25 +21,67 @@ Future<void> showSendGiftSheet(BuildContext context, String? receiverUid, [Strin
     context: context,
     backgroundColor: Colors.transparent,
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-    builder: (context) => _SendGiftSheet(receiverUid: receiverUid, receiverName: receiverName),
+    builder: (sheetContext) => _SendGiftSheet(
+      receiverUid: receiverUid,
+      receiverName: receiverName,
+      roomId: roomId,
+      parentContext: context,
+    ),
   );
 }
 
 class _SendGiftSheet extends StatefulWidget {
   final String receiverUid;
   final String? receiverName;
-  const _SendGiftSheet({required this.receiverUid, this.receiverName});
+  final String? roomId;
+  final BuildContext parentContext;
+  const _SendGiftSheet({
+    required this.receiverUid,
+    this.receiverName,
+    this.roomId,
+    required this.parentContext,
+  });
 
   @override
   State<_SendGiftSheet> createState() => _SendGiftSheetState();
 }
 
 class _SendGiftSheetState extends State<_SendGiftSheet> {
-  bool _sending = false;
+  /// Fire-and-forget: posts the "X sent Y a gift" line into the room chat.
+  /// A plain try/catch (not .catchError on the Future) so a failed write
+  /// here — e.g. a Firestore rules rejection — never crashes the app and
+  /// never affects the gift transaction, which has already completed.
+  Future<void> _postGiftChatMessage({
+    required String roomId,
+    required String senderUid,
+    required String senderName,
+    required String receiverName,
+    required String giftName,
+    required String giftEmoji,
+  }) async {
+    try {
+      await FirebaseFirestore.instance.collection('party_rooms').doc(roomId).collection('messages').add({
+        'type': 'gift',
+        'senderUid': senderUid,
+        'senderName': senderName,
+        'receiverName': receiverName,
+        'giftName': giftName,
+        'giftEmoji': giftEmoji,
+        'text': "$senderName ne $receiverName ko $giftEmoji $giftName bheja",
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint("Failed to post gift chat message: $e");
+    }
+  }
 
-  Future<void> _sendGift(DocumentSnapshot giftDoc) async {
+  /// Tapping a gift closes the sheet immediately — the actual send
+  /// (coin deduction + Firestore transaction) then runs in the background
+  /// using [widget.parentContext] (the underlying room screen) for any
+  /// success/failure feedback, since the sheet's own context is gone.
+  void _sendGift(DocumentSnapshot giftDoc) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || _sending) return;
+    if (uid == null) return;
 
     if (uid == widget.receiverUid) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -44,18 +90,25 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
       return;
     }
 
-    setState(() => _sending = true);
+    Navigator.pop(context);
+    _sendGiftInBackground(uid, giftDoc);
+  }
 
+  Future<void> _sendGiftInBackground(String uid, DocumentSnapshot giftDoc) async {
+    final parentContext = widget.parentContext;
     final giftPrice = (giftDoc.get('coinPrice') as num).toInt();
     final giftName = giftDoc.get('name') as String;
+    final giftEmoji = (giftDoc.get('emoji') as String?) ?? "🎁";
     final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
     final receiverRef = FirebaseFirestore.instance.collection('users').doc(widget.receiverUid);
+    String senderName = "User";
 
     try {
       await FirebaseFirestore.instance.runTransaction((tx) async {
         final senderSnap = await tx.get(userRef);
         final senderCoins = ((senderSnap.data()?['coins'] ?? 0) as num).toInt();
         final senderTotalSent = ((senderSnap.data()?['totalSent'] ?? 0) as num).toInt();
+        senderName = (senderSnap.data()?['name'] as String?) ?? "User";
 
         if (senderCoins < giftPrice) {
           throw Exception("INSUFFICIENT_COINS");
@@ -78,22 +131,33 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
         });
       });
 
-      if (!mounted) return;
-      Navigator.pop(context);
-      // Prevent the room's comment/chat box from popping open on its own
-      // once this sheet closes and focus would otherwise return to it.
-      FocusManager.instance.primaryFocus?.unfocus();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("$giftName bhej diya! 🎉")),
-      );
+      // Best-effort: also drop a line into the room chat so everyone sees
+      // the gift. Kept outside/after the transaction and wrapped separately
+      // so a hiccup here never makes a successfully-sent gift look failed.
+      if (widget.roomId != null) {
+        final receiverName = widget.receiverName ?? "User";
+        _postGiftChatMessage(
+          roomId: widget.roomId!,
+          senderUid: uid,
+          senderName: senderName,
+          receiverName: receiverName,
+          giftName: giftName,
+          giftEmoji: giftEmoji,
+        );
+      }
+
+      if (parentContext.mounted) {
+        ScaffoldMessenger.of(parentContext).showSnackBar(
+          SnackBar(content: Text("$giftName bhej diya! 🎉")),
+        );
+      }
     } catch (e) {
-      if (!mounted) return;
       final message = e.toString().contains("INSUFFICIENT_COINS")
           ? "Aapke paas kaafi coins nahi hain"
           : "Gift nahi bheja ja saka: $e";
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-    } finally {
-      if (mounted) setState(() => _sending = false);
+      if (parentContext.mounted) {
+        ScaffoldMessenger.of(parentContext).showSnackBar(SnackBar(content: Text(message)));
+      }
     }
   }
 
@@ -152,7 +216,7 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
                     itemBuilder: (context, index) {
                       final doc = docs[index];
                       return GestureDetector(
-                        onTap: _sending ? null : () => _sendGift(doc),
+                        onTap: () => _sendGift(doc),
                         child: Column(
                           children: [
                             Container(
@@ -185,13 +249,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
                     },
                   );
                 },
-              ),
-            ),
-            if (_sending) Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: const LinearProgressIndicator(color: Colors.amberAccent, minHeight: 3),
               ),
             ),
           ],
