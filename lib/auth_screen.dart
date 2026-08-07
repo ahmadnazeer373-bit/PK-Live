@@ -17,6 +17,111 @@ class _AuthScreenState extends State<AuthScreen> {
   bool isLoading = false;
   bool obscurePassword = true;
 
+  bool isSendingReset = false;
+
+  Future<void> _showForgotPasswordDialog() async {
+    final resetEmailController = TextEditingController(text: emailController.text.trim());
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF241B4A),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              title: const Text(
+                "Reset Password",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "Enter your account email. We'll send you a link to reset your password.",
+                    style: TextStyle(color: Colors.white70, fontSize: 13),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: resetEmailController,
+                    autofocus: true,
+                    keyboardType: TextInputType.emailAddress,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      hintText: "Email",
+                      hintStyle: const TextStyle(color: Colors.white38),
+                      prefixIcon: const Icon(Icons.email_outlined, color: Colors.amberAccent),
+                      filled: true,
+                      fillColor: Colors.white.withOpacity(0.06),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSendingReset ? null : () => Navigator.pop(dialogContext),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.white54)),
+                ),
+                TextButton(
+                  onPressed: isSendingReset
+                      ? null
+                      : () async {
+                          final email = resetEmailController.text.trim();
+                          if (email.isEmpty) {
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              const SnackBar(content: Text("Please enter your email")),
+                            );
+                            return;
+                          }
+
+                          setDialogState(() => isSendingReset = true);
+
+                          try {
+                            await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
+                            if (!mounted) return;
+                            Navigator.pop(dialogContext);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text("Password reset link sent to $email")),
+                            );
+                          } on FirebaseAuthException catch (e) {
+                            setDialogState(() => isSendingReset = false);
+                            String message = e.message ?? "Couldn't send reset email";
+                            if (e.code == 'user-not-found') {
+                              message = "No account found with this email";
+                            } else if (e.code == 'invalid-email') {
+                              message = "Please enter a valid email address";
+                            }
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(content: Text(message)),
+                            );
+                          } catch (e) {
+                            setDialogState(() => isSendingReset = false);
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(content: Text("Something went wrong: $e")),
+                            );
+                          }
+                        },
+                  child: isSendingReset
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(color: Colors.amberAccent, strokeWidth: 2),
+                        )
+                      : const Text("Send Link", style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.w600)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> loginUser() async {
     if (emailController.text.trim().isEmpty || passwordController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -188,7 +293,23 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                     ),
 
-                    const SizedBox(height: 28),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: isLoading ? null : _showForgotPasswordDialog,
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.only(top: 10),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        child: const Text(
+                          "Forgot Password?",
+                          style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 18),
                     SizedBox(
                       width: double.infinity,
                       height: 54,

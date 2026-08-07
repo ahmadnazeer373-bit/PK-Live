@@ -12,6 +12,7 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:http/http.dart' as http;
 import 'send_gift_sheet.dart';
 import 'message_inbox_screen.dart';
+import 'vip_utils.dart';
 
 // TODO: Replace with your own Agora App ID from console.agora.io
 const String agoraAppId = "508ffabe8f984a6f897794fbccc4cec9";
@@ -259,6 +260,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     if (uid == null) return;
     final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     final userData = userDoc.data() ?? {};
+    final vipLevel = vipLevelForSpend(((userData['totalSent'] ?? 0) as num).toInt());
 
     await _roomDoc.collection('audience').doc(uid).set({
       'uid': uid,
@@ -266,7 +268,21 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
       'avatar': userData['avatar'] ?? "🧑",
       'avatarUrl': userData['avatarUrl'] ?? "",
       'joinedAt': FieldValue.serverTimestamp(),
+      'vipLevel': vipLevel,
     });
+
+    // VIP entrance effect — a glowing banner announcing their arrival,
+    // shown in the room chat feed.
+    if (vipLevel > 0) {
+      await _roomDoc.collection('messages').add({
+        'type': 'entrance',
+        'senderUid': uid,
+        'senderName': userData['name'] ?? "User",
+        'senderVipLevel': vipLevel,
+        'text': "${userData['name'] ?? 'User'} entered the room",
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
   }
 
   Future<void> _leaveAudience() async {
@@ -1308,6 +1324,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     final totalSent = ((userData['totalSent'] ?? 0) as num).toInt();
     final receivingLevel = _levelForCoins(totalGifts);
     final sendingLevel = _levelForCoins(totalSent);
+    final vipLevel = vipLevelForSpend(totalSent);
 
     if (!mounted) return;
 
@@ -1343,28 +1360,41 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
                 borderRadius: BorderRadius.circular(3),
               ),
             ),
-            Container(
-              padding: const EdgeInsets.all(3),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: const LinearGradient(colors: [Color(0xFFFFD700), Color(0xFFFF8C00)]),
-                boxShadow: [BoxShadow(color: Colors.amber.withOpacity(0.4), blurRadius: 16, spreadRadius: 1)],
-              ),
-              child: CircleAvatar(
-                radius: 36,
-                backgroundColor: Colors.white10,
-                child: _avatarImage(targetAvatarUrl, targetAvatar, 66),
+            VipAvatarFrame(
+              level: vipLevel,
+              borderWidth: 3,
+              child: Container(
+                padding: const EdgeInsets.all(3),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(colors: [Color(0xFFFFD700), Color(0xFFFF8C00)]),
+                  boxShadow: [BoxShadow(color: Colors.amber.withOpacity(0.4), blurRadius: 16, spreadRadius: 1)],
+                ),
+                child: CircleAvatar(
+                  radius: 36,
+                  backgroundColor: Colors.white10,
+                  child: _avatarImage(targetAvatarUrl, targetAvatar, 66),
+                ),
               ),
             ),
             const SizedBox(height: 12),
-            Text(
-              targetName,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                shadows: [Shadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 1))],
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  targetName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    shadows: [Shadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 1))],
+                  ),
+                ),
+                if (vipLevel > 0) ...[
+                  const SizedBox(width: 6),
+                  VipBadge(level: vipLevel, fontSize: 11),
+                ],
+              ],
             ),
             const SizedBox(height: 10),
             SingleChildScrollView(
@@ -1670,6 +1700,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
         'avatar': userData['avatar'] ?? "🧑",
         'avatarUrl': userData['avatarUrl'] ?? "",
         'isMuted': false,
+        'vipLevel': vipLevelForSpend(((userData['totalSent'] ?? 0) as num).toInt()),
       });
       await batch.commit();
 
@@ -1790,11 +1821,13 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
 
     final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     final name = userDoc.data()?['name'] ?? "User";
+    final vipLevel = vipLevelForSpend(((userDoc.data()?['totalSent'] ?? 0) as num).toInt());
 
     await _roomDoc.collection('messages').add({
       'text': text,
       'senderUid': uid,
       'senderName': name,
+      'senderVipLevel': vipLevel,
       'createdAt': FieldValue.serverTimestamp(),
     });
   }
@@ -1814,84 +1847,56 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     _messageFocusNode.requestFocus();
   }
 
-  Future<void> _openRecipientPicker() async {
+  Future<void> _openRecipientPicker(Map<String, dynamic> roomData) async {
     final seatsSnap = await _roomRef.get();
     final myUid = user?.uid;
+    final hostUid = roomData['hostUid'] as String?;
+
     final occupants = seatsSnap.docs
         .map((d) => d.data() as Map<String, dynamic>)
         .where((data) => data['uid'] != null && data['uid'] != myUid)
         .toList();
 
-    if (occupants.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No one is seated to send a gift to")),
-      );
-      return;
+    // Make sure the host shows up in the recipient list even if they
+    // aren't currently seated (e.g. standing in the audience) — fetch
+    // their name from Firestore since a seat doc won't exist for them.
+    final hostAlreadySeated = occupants.any((data) => data['uid'] == hostUid);
+    if (hostUid != null && hostUid != myUid && !hostAlreadySeated) {
+      String? hostName;
+      String? hostAvatar;
+      try {
+        final hostDoc = await FirebaseFirestore.instance.collection('users').doc(hostUid).get();
+        hostName = hostDoc.data()?['name'] as String?;
+        hostAvatar = hostDoc.data()?['avatar'] as String?;
+      } catch (_) {
+        // Best-effort — falls back to defaults below if this fails.
+      }
+      occupants.insert(0, {'uid': hostUid, 'name': hostName ?? 'Host', 'avatar': hostAvatar ?? '🧑'});
     }
 
     if (!mounted) return;
-    final selected = await showModalBottomSheet<Map<String, dynamic>>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => SafeArea(
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF241E42), Color(0xFF17142B)],
-            ),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-            border: Border.all(color: Colors.white.withOpacity(0.06)),
-          ),
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.card_giftcard, color: Colors.pinkAccent, size: 18),
-                  const SizedBox(width: 8),
-                  const Text("Who should receive the gift?", style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
-                ],
-              ),
-              const SizedBox(height: 12),
-              ...occupants.map((data) => Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.04),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withOpacity(0.06)),
-                    ),
-                    child: ListTile(
-                      leading: Container(
-                        padding: const EdgeInsets.all(2),
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: LinearGradient(colors: [Color(0xFFB983FF), Color(0xFF5B247A)]),
-                        ),
-                        child: CircleAvatar(
-                          backgroundColor: Colors.white10,
-                          child: Text(data['avatar'] ?? "🧑", style: const TextStyle(fontSize: 18)),
-                        ),
-                      ),
-                      title: Text(data['name'] ?? "User", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                      trailing: const Icon(Icons.chevron_right, color: Colors.white38, size: 18),
-                      onTap: () => Navigator.pop(context, data),
-                    ),
-                  )),
-            ],
-          ),
-        ),
-      ),
-    );
 
-    if (selected != null && mounted) {
-      showSendGiftSheet(context, selected['uid'] as String?, selected['name'] as String?, widget.roomId);
+    Map<String, dynamic>? defaultRecipient;
+    if (occupants.isNotEmpty) {
+      defaultRecipient = occupants.firstWhere(
+        (data) => data['uid'] == hostUid,
+        orElse: () => occupants.first,
+      );
     }
+
+    // Always open the gift box — even with no one to send to, it can
+    // still be browsed. When someone (host and/or seated users) is
+    // present, the sheet itself shows a recipient row (with an "All"
+    // option) along its top; if it's empty, "no one to receive" is only
+    // shown once the sender actually tries to hit Send.
+    showSendGiftSheet(
+      context,
+      defaultRecipient?['uid'] as String?,
+      defaultRecipient?['name'] as String?,
+      widget.roomId,
+      occupants,
+      hostUid,
+    );
   }
 
   @override
@@ -1979,6 +1984,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     final isOccupied = data != null && data['uid'] != null;
     final isMe = isOccupied && data!['uid'] == user?.uid;
     final isMuted = data?['isMuted'] == true;
+    final vipLevel = isOccupied ? (((data!['vipLevel'] ?? 0) as num).toInt()) : 0;
 
     return GestureDetector(
       onTap: () => _onSeatTap(index, data, roomData),
@@ -1988,7 +1994,9 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
           Stack(
             clipBehavior: Clip.none,
             children: [
-              Container(
+              VipAvatarFrame(
+                level: vipLevel,
+                child: Container(
                 width: 48,
                 height: 48,
                 padding: const EdgeInsets.all(2),
@@ -2031,6 +2039,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
                       ? _avatarImage(data!['avatarUrl'] as String?, data['avatar'] ?? "🧑", 43)
                       : Center(child: Icon(Icons.lock_outline, color: Colors.white.withOpacity(0.4), size: 19)),
                 ),
+                ),
               ),
               if (isOccupied)
                 Positioned(
@@ -2069,6 +2078,10 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
               fontWeight: isOccupied ? FontWeight.w600 : FontWeight.normal,
             ),
           ),
+          if (vipLevel > 0) ...[
+            const SizedBox(height: 1),
+            VipBadge(level: vipLevel, fontSize: 8),
+          ],
         ],
       ),
     );
@@ -2078,6 +2091,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
   // crest around it, same tap/seat logic as every other seat.
   Widget _hostSeatWidget(Map<String, dynamic>? data, Map<String, dynamic> roomData) {
     final isOccupied = data != null && data['uid'] != null;
+    final vipLevel = isOccupied ? (((data!['vipLevel'] ?? 0) as num).toInt()) : 0;
 
     return GestureDetector(
       onTap: () => _onSeatTap(0, data, roomData),
@@ -2157,6 +2171,10 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
                 ),
+                if (vipLevel > 0) ...[
+                  const SizedBox(width: 4),
+                  VipBadge(level: vipLevel, fontSize: 8),
+                ],
               ],
             ),
           ),
@@ -2248,6 +2266,40 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
                   itemBuilder: (context, index) {
                     final data = docs[index].data() as Map<String, dynamic>;
                     final isGift = data['type'] == 'gift';
+                    final isEntrance = data['type'] == 'entrance';
+
+                    if (isEntrance) {
+                      final entranceLevel = ((data['senderVipLevel'] ?? 0) as num).toInt();
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: vipGradient(entranceLevel).map((c) => c.withOpacity(0.22)).toList(),
+                            ),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: vipColor(entranceLevel).withOpacity(0.4)),
+                          ),
+                          child: Row(
+                            children: [
+                              VipBadge(level: entranceLevel, fontSize: 10),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  data['text'] ?? "",
+                                  style: TextStyle(
+                                    color: vipColor(entranceLevel),
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
 
                     if (isGift) {
                       return Padding(
@@ -2293,6 +2345,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
                       );
                     }
 
+                    final senderVipLevel = ((data['senderVipLevel'] ?? 0) as num).toInt();
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
                       child: Container(
@@ -2304,10 +2357,18 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
                         child: RichText(
                         text: TextSpan(
                           children: [
+                            if (senderVipLevel > 0)
+                              WidgetSpan(
+                                alignment: PlaceholderAlignment.middle,
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 4),
+                                  child: VipBadge(level: senderVipLevel, fontSize: 9),
+                                ),
+                              ),
                             TextSpan(
                               text: "${data['senderName'] ?? 'User'}: ",
-                              style: const TextStyle(
-                                color: Colors.amberAccent,
+                              style: TextStyle(
+                                color: senderVipLevel > 0 ? vipColor(senderVipLevel) : Colors.amberAccent,
                                 fontSize: 12.5,
                                 fontWeight: FontWeight.bold,
                               ),
@@ -2881,7 +2942,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
               icon: const Icon(Icons.card_giftcard, color: Colors.black87, size: 18),
               onPressed: () {
                 FocusScope.of(context).unfocus();
-                _openRecipientPicker();
+                _openRecipientPicker(roomData);
               },
             ),
           ),
