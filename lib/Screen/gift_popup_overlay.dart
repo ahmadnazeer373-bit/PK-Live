@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../widgets/full_screen_video_gift.dart';
+import '../services/level_service.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -36,6 +37,8 @@ class _GiftPopupOverlayState extends State<GiftPopupOverlay>
   @override
   void initState() {
     super.initState();
+    print("🔥🔥🔥 GiftPopupOverlay initState() called!");
+    
     _controller = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 400));
     _slide = Tween<Offset>(begin: const Offset(-1.3, 0), end: Offset.zero)
@@ -43,6 +46,7 @@ class _GiftPopupOverlayState extends State<GiftPopupOverlay>
     _fade = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
 
     _busSubscription = GiftPopupBus.stream.listen(_handleNewGift);
+    print("🔥🔥🔥 GiftPopupBus listener registered!");
   }
 
   @override
@@ -53,37 +57,42 @@ class _GiftPopupOverlayState extends State<GiftPopupOverlay>
   }
 
   void _handleNewGift(Map<String, dynamic> giftData) {
+    print("🔥🔥🔥 _handleNewGift() called!");
     print("🎁 Gift received: ${giftData['videoUrl']}");
 
-    if (giftData['videoUrl'] != null &&
-        giftData['videoUrl'].toString().isNotEmpty) {
-      print("🎬 Video gift detected! Opening full-screen video...");
+    final videoUrl = giftData['videoUrl'] as String?;
+    
+    if (videoUrl != null && videoUrl.isNotEmpty && videoUrl.startsWith('http')) {
+      print("🎬 Video gift detected! URL: $videoUrl");
       _showVideoOverlay(giftData);
       return;
     }
 
+    print("📦 Normal gift (emoji/image)");
     _queue.add(giftData);
     if (_current == null) _showNext();
   }
 
   void _showVideoOverlay(Map<String, dynamic> giftData) {
+    final videoUrl = giftData['videoUrl'] as String? ?? '';
+    print("🚀 Opening video: $videoUrl");
+    
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => FullScreenVideoGift(
-          videoUrl: giftData['videoUrl'],
+          videoUrl: videoUrl,
           senderName: giftData['senderName'] ?? 'User',
           receiverName: giftData['receiverName'] ?? 'User',
           giftName: giftData['giftName'] ?? 'Gift',
         ),
       ),
     ).then((_) {
-      // 🔥 Video screen close hone ke baad COMPLETE state reset
       if (mounted) {
         setState(() {
           _current = null;
           _queue.clear();
-          _isFirstSnapshot = true; // 🔥 Stream dobara load karein
-          _lastSeenMessageId = null; // 🔥 Last message ID reset karein
+          _isFirstSnapshot = true;
+          _lastSeenMessageId = null;
         });
       }
     });
@@ -123,6 +132,7 @@ class _GiftPopupOverlayState extends State<GiftPopupOverlay>
 
   @override
   Widget build(BuildContext context) {
+    print("🔥🔥🔥 GiftPopupOverlay build() called!");
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('party_rooms')
@@ -146,8 +156,10 @@ class _GiftPopupOverlayState extends State<GiftPopupOverlay>
             final isOwnGift =
                 data['senderUid'] == FirebaseAuth.instance.currentUser?.uid;
             if (!isOwnGift) {
-              if (data['videoUrl'] != null &&
-                  data['videoUrl'].toString().isNotEmpty) {
+              _updateReceiverLevel(data);
+              
+              final videoUrl = data['videoUrl'] as String?;
+              if (videoUrl != null && videoUrl.isNotEmpty && videoUrl.startsWith('http')) {
                 WidgetsBinding.instance.addPostFrameCallback((_) {
                   print("🎬 Video gift from Firestore!");
                   _showVideoOverlay(data);
@@ -237,5 +249,19 @@ class _GiftPopupOverlayState extends State<GiftPopupOverlay>
         );
       },
     );
+  }
+
+  void _updateReceiverLevel(Map<String, dynamic> giftData) async {
+    try {
+      final receiverUid = giftData['receiverUid'] as String?;
+      final totalPrice = (giftData['totalPrice'] ?? 0) as int;
+      
+      if (receiverUid != null && totalPrice > 0) {
+        await LevelService.instance.updateReceivingLevel(receiverUid, totalPrice);
+        print("✅ Receiver level updated for: $receiverUid");
+      }
+    } catch (e) {
+      print("❌ Error updating receiver level: $e");
+    }
   }
 }

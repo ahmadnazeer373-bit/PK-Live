@@ -27,13 +27,19 @@ class _FullScreenVideoGiftState extends State<FullScreenVideoGift> {
   @override
   void initState() {
     super.initState();
+    
     _controller = VideoPlayerController.network(widget.videoUrl)
       ..initialize().then((_) {
         if (mounted) {
+          _controller.play();
           setState(() {
             _isInitialized = true;
-            _controller.play();
           });
+        }
+      }).catchError((error) {
+        print("⚠️ Video error: $error");
+        if (mounted) {
+          Navigator.of(context).pop();
         }
       });
 
@@ -58,11 +64,6 @@ class _FullScreenVideoGiftState extends State<FullScreenVideoGift> {
           try {
             if (Navigator.of(context).canPop()) {
               Navigator.of(context).pop();
-            } else {
-              print("⚠️ Cannot pop video screen, skipping...");
-              if (mounted) {
-                setState(() {});
-              }
             }
           } catch (e) {
             print("⚠️ Error closing video: $e");
@@ -76,14 +77,14 @@ class _FullScreenVideoGiftState extends State<FullScreenVideoGift> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Center(
-        child: _isInitialized
-            ? AspectRatio(
+      body: _isInitialized
+          ? Center(
+              child: AspectRatio(
                 aspectRatio: _controller.value.aspectRatio,
                 child: VideoPlayer(_controller),
-              )
-            : const CircularProgressIndicator(color: Colors.amberAccent),
-      ),
+              ),
+            )
+          : Container(color: Colors.black),
     );
   }
 }

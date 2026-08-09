@@ -2,24 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'gift_popup_overlay.dart';
+import '../services/level_service.dart';
 
-/// Opens a bottom sheet with tabbed gift categories (Event/Hot/VIP/Customized).
-/// User taps a gift to select it, picks a quantity, then taps Send to gift
-/// it to the selected recipient — deducting coins from the sender and
-/// crediting totalGifts to the receiver (used for home-screen top-gifted
-/// ranking).
-///
-/// [receiverUid]/[receiverName] is the default/initial recipient. If
-/// [recipients] has more than one entry (multiple people seated in the
-/// room), a horizontal recipient row is shown along the top of the sheet
-/// so the sender can switch who the gift goes to before sending — instead
-/// of a separate "who should receive the gift?" step beforehand. Each
-/// entry is expected to have 'uid', 'name', and optionally 'avatar' keys.
-/// [hostUid], if provided, is used to badge the host in that row.
-///
-/// If [roomId] is provided, a "X sent Y a 🎁 Gift" line is also posted into
-/// that party room's chat (party_rooms/{roomId}/messages) after the gift
-/// goes through.
 Future<void> showSendGiftSheet(
   BuildContext context,
   String? receiverUid, [
@@ -82,10 +66,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
   int _quantity = 1;
   bool _isSending = false;
 
-  /// Fire-and-forget: posts the "X sent Y a gift" line into the room chat.
-  /// A plain try/catch (not .catchError on the Future) so a failed write
-  /// here — e.g. a Firestore rules rejection — never crashes the app and
-  /// never affects the gift transaction, which has already completed.
   Future<void> _postGiftChatMessage({
     required String roomId,
     required String senderUid,
@@ -126,13 +106,12 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
     setState(() => _selectedGift = giftDoc);
   }
 
-  /// Tapping Send closes the sheet immediately — the actual send
-  /// (coin deduction + Firestore transaction) then runs in the background
-  /// using [widget.parentContext] (the underlying room screen) for any
-  /// success/failure feedback, since the sheet's own context is gone.
   void _confirmSend() {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || _selectedGift == null || _isSending) return;
+    
+    if (uid == null || _selectedGift == null || _isSending) {
+      return;
+    }
 
     final giftDoc = _selectedGift!;
     final quantity = _quantity;
@@ -200,9 +179,30 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
 
         final receiverGifts = ((receiverSnap.data()?['totalGifts'] ?? 0) as num).toInt();
 
-        tx.update(userRef, {'coins': senderCoins - totalPrice, 'totalSent': senderTotalSent + totalPrice});
-        tx.update(receiverRef, {'totalGifts': receiverGifts + totalPrice});
+        // 🔥 60/40 SPLIT LOGIC
+        final receiverEarn = (totalPrice * 0.60).round();
+        final companyShare = totalPrice - receiverEarn;
 
+        // Sender: coins deduct, totalSent update
+        tx.update(userRef, {
+          'coins': senderCoins - totalPrice,
+          'totalSent': senderTotalSent + totalPrice,
+        });
+
+        // 🔥 FIX: set() with merge:true - field create karega agar nahi hai
+        // aur value increment bhi karega
+        tx.set(receiverRef, {
+          'totalGifts': receiverGifts + totalPrice,
+          'earnedCoins': FieldValue.increment(receiverEarn),
+        }, SetOptions(merge: true));
+
+        // Company Revenue Track (40%)
+        final companyRef = FirebaseFirestore.instance.collection('meta').doc('platformRevenue');
+        tx.set(companyRef, {
+          'totalRevenue': FieldValue.increment(companyShare),
+        }, SetOptions(merge: true));
+
+        // Gift transaction record
         final txnRef = FirebaseFirestore.instance.collection('gift_transactions').doc();
         tx.set(txnRef, {
           'senderUid': uid,
@@ -212,13 +212,18 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
           'coinPrice': unitPrice,
           'quantity': quantity,
           'totalPrice': totalPrice,
+          'receiverEarn': receiverEarn,
+          'companyShare': companyShare,
           'createdAt': FieldValue.serverTimestamp(),
         });
       });
 
-      // Best-effort: also drop a line into the room chat so everyone sees
-      // the gift. Kept outside/after the transaction and wrapped separately
-      // so a hiccup here never makes a successfully-sent gift look failed.
+      // 🔥 AUTO UPDATE SENDING LEVEL
+      await LevelService.instance.updateSendingLevel(uid, totalPrice);
+
+      // 🔥 AUTO UPDATE RECEIVING LEVEL
+      await LevelService.instance.updateReceivingLevel(receiverUid, totalPrice);
+
       if (widget.roomId != null) {
         final receiverName = receiverNameArg ?? "User";
         _postGiftChatMessage(
@@ -299,7 +304,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
               mainAxisSize: MainAxisSize.min,
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                // 🔥 Video/Image/Emoji
                 data['videoUrl'] != null && 
                     data['videoUrl'].toString().isNotEmpty && 
                     data['category'] == 'Customized'
@@ -402,9 +406,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ---------- Recipient row (only when more than one person is
-            // seated — otherwise the recipient was already fixed when this
-            // sheet was opened, so no picker is needed) ----------
             if ((widget.recipients?.length ?? 0) > 1) ...[
               Row(
                 children: [
@@ -488,7 +489,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
               const SizedBox(height: 10),
             ],
 
-            // ---------- Category tabs ----------
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -499,7 +499,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
             Divider(color: Colors.white.withOpacity(0.06), height: 1),
             const SizedBox(height: 12),
 
-            // ---------- Gift grid ----------
             Flexible(
               child: StreamBuilder<QuerySnapshot>(
                 stream: FirebaseFirestore.instance
@@ -544,10 +543,8 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
             Divider(color: Colors.white.withOpacity(0.06), height: 1),
             const SizedBox(height: 10),
 
-            // ---------- Bottom bar: coin balance, quantity, Send ----------
             Row(
               children: [
-                // Coin balance
                 if (uid != null)
                   StreamBuilder<DocumentSnapshot>(
                     stream: FirebaseFirestore.instance.collection('users').doc(uid).snapshots(),
@@ -564,7 +561,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
                   ),
                 const Spacer(),
 
-                // Quantity dropdown
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   decoration: BoxDecoration(
@@ -588,7 +584,6 @@ class _SendGiftSheetState extends State<_SendGiftSheet> {
                 ),
                 const SizedBox(width: 12),
 
-                // Send button
                 GestureDetector(
                   onTap: _selectedGift == null ? null : _confirmSend,
                   child: Container(

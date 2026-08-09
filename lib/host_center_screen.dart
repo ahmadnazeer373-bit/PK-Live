@@ -4,33 +4,12 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'agency_owner_dashboard.dart';
 import 'wallet_screen.dart';
 import 'income_detail_screen.dart';
-
-// Level thresholds are based on lifetime totalGifts (coins earned from
-// gifts). Adjust these numbers to match your actual host-tier business
-// rules whenever they're finalized.
-const List<int> _levelThresholds = [0, 5000, 15000, 40000, 100000, 250000, 600000];
+import 'services/level_service.dart'; // 🔥 Import LevelService
 
 class HostCenterScreen extends StatelessWidget {
   const HostCenterScreen({super.key});
 
   User? get user => FirebaseAuth.instance.currentUser;
-
-  ({int level, int currentInLevel, int neededForNext}) _computeLevel(int totalGifts) {
-    int level = 1;
-    for (int i = _levelThresholds.length - 1; i >= 0; i--) {
-      if (totalGifts >= _levelThresholds[i]) {
-        level = i + 1;
-        break;
-      }
-    }
-    final currentThreshold = _levelThresholds[level - 1];
-    final nextThreshold = level < _levelThresholds.length ? _levelThresholds[level] : currentThreshold;
-    return (
-      level: level,
-      currentInLevel: totalGifts - currentThreshold,
-      neededForNext: nextThreshold - currentThreshold,
-    );
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -60,10 +39,10 @@ class HostCenterScreen extends StatelessWidget {
               final data = snapshot.data?.data() as Map<String, dynamic>?;
               final coins = ((data?['coins'] ?? 0) as num).toInt();
               final totalGifts = ((data?['totalGifts'] ?? 0) as num).toInt();
-              final levelInfo = _computeLevel(totalGifts);
-              final progress = levelInfo.neededForNext == 0
-                  ? 1.0
-                  : (levelInfo.currentInLevel / levelInfo.neededForNext).clamp(0.0, 1.0);
+              // 🔥 Earned Coins
+              final earnedCoins = ((data?['earnedCoins'] ?? 0) as num).toInt();
+              // 🔥 Receiving Level - direct from database
+              final receivingLevel = (data?['receivingLevel'] ?? 1) as int;
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -180,27 +159,21 @@ class HostCenterScreen extends StatelessWidget {
                             const SizedBox(height: 18),
                             Divider(color: Colors.white.withOpacity(0.15), height: 1),
                             const SizedBox(height: 16),
+                            // 🔥 Updated: 3 items in a row
                             Row(
                               children: [
                                 _StatItem(label: "Coin Balance", value: "$coins"),
-                                _StatItem(label: "Level", value: "Lv.${levelInfo.level}"),
+                                _StatItem(label: "Earned Coins", value: "$earnedCoins"),
+                                // 🔥 Receiving Level display
+                                _StatItem(label: "Level", value: "Lv.$receivingLevel"),
                               ],
                             ),
                             const SizedBox(height: 16),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(6),
-                              child: LinearProgressIndicator(
-                                value: progress,
-                                minHeight: 8,
-                                backgroundColor: Colors.white.withOpacity(0.15),
-                                valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
-                              ),
-                            ),
+                            // 🔥 Progress Bar - Receiving Level progress
+                            _ReceivingLevelProgress(receivingLevel: receivingLevel),
                             const SizedBox(height: 6),
                             Text(
-                              levelInfo.neededForNext == 0
-                                  ? "Max level reached"
-                                  : "${levelInfo.neededForNext - levelInfo.currentInLevel} coins to reach Lv.${levelInfo.level + 1}",
+                              "Earn more coins to reach next level",
                               style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 11),
                             ),
                           ],
@@ -257,6 +230,107 @@ class HostCenterScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// 🔥 NEW: Receiving Level Progress Widget
+class _ReceivingLevelProgress extends StatelessWidget {
+  final int receivingLevel;
+
+  const _ReceivingLevelProgress({required this.receivingLevel});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: LevelService.instance.getLevelRules(type: 'receiving'),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: 0,
+              minHeight: 8,
+              backgroundColor: Colors.white.withOpacity(0.15),
+              valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
+            ),
+          );
+        }
+
+        final rules = snapshot.data!;
+        // Sort rules by level
+        rules.sort((a, b) => (a['level'] as int).compareTo(b['level'] as int));
+
+        // Find current level rule
+        Map<String, dynamic>? currentRule;
+        Map<String, dynamic>? nextRule;
+
+        for (int i = 0; i < rules.length; i++) {
+          final rule = rules[i];
+          if (rule['level'] == receivingLevel) {
+            currentRule = rule;
+            if (i + 1 < rules.length) {
+              nextRule = rules[i + 1];
+            }
+            break;
+          }
+        }
+
+        // If no current rule found, use first rule
+        if (currentRule == null && rules.isNotEmpty) {
+          currentRule = rules.first;
+          if (rules.length > 1) {
+            nextRule = rules[1];
+          }
+        }
+
+        // If no next rule, max level reached
+        if (nextRule == null) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: 1.0,
+                  minHeight: 8,
+                  backgroundColor: Colors.white.withOpacity(0.15),
+                  valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                "🌟 Max Level Reached!",
+                style: TextStyle(color: Colors.amberAccent.withOpacity(0.9), fontSize: 11),
+              ),
+            ],
+          );
+        }
+
+        final currentThreshold = (currentRule?['minCoins'] ?? 0) as int;
+        final nextThreshold = (nextRule['minCoins'] ?? 0) as int;
+        final needed = nextThreshold - currentThreshold;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: 0, // We don't have current progress here, just showing the level
+                minHeight: 8,
+                backgroundColor: Colors.white.withOpacity(0.15),
+                valueColor: const AlwaysStoppedAnimation(Colors.amberAccent),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              "Level $receivingLevel → Level ${nextRule['level']} (${needed} coins needed)",
+              style: TextStyle(color: Colors.white.withOpacity(0.7), fontSize: 11),
+            ),
+          ],
+        );
+      },
     );
   }
 }

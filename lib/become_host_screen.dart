@@ -106,6 +106,21 @@ class BecomeHostScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 18),
                     ] else ...[
+                      // 🔥 SWAPPED: Join Agency PEHLE
+                      _optionCard(
+                        context,
+                        icon: Icons.group_add_outlined,
+                        color: Colors.tealAccent,
+                        title: "Join an Agency",
+                        subtitle: "Enter an agency owner's invite code to become a host",
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => const JoinAgencyScreen()),
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // 🔥 SWAPPED: Create Your Own Agency BAAD MEIN
                       _optionCard(
                         context,
                         icon: Icons.business_center_outlined,
@@ -119,19 +134,6 @@ class BecomeHostScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 18),
                     ],
-
-                    if (agencyId == null)
-                      _optionCard(
-                        context,
-                        icon: Icons.group_add_outlined,
-                        color: Colors.tealAccent,
-                        title: "Join an Agency",
-                        subtitle: "Enter an agency owner's invite code to become a host",
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (context) => const JoinAgencyScreen()),
-                        ),
-                      ),
                   ],
                 ),
               );

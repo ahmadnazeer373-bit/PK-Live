@@ -12,7 +12,8 @@ import 'package:image_cropper/image_cropper.dart';
 import 'package:http/http.dart' as http;
 import 'send_gift_sheet.dart';
 import 'message_inbox_screen.dart';
-import 'vip_utils.dart';
+import '../vip_utils.dart';
+import 'gift_popup_overlay.dart';
 
 // TODO: Replace with your own Agora App ID from console.agora.io
 const String agoraAppId = "508ffabe8f984a6f897794fbccc4cec9";
@@ -65,9 +66,6 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
   DocumentReference get _roomDoc => FirebaseFirestore.instance.collection('party_rooms').doc(widget.roomId);
 
   // ---------------- Shared premium popup shell ----------------
-  // Every dialog in this screen (not just the bottom sheets) uses this same
-  // dark-purple gradient + soft border + shadow, so nothing ever renders as
-  // a flat single-color box.
   Future<T?> _showPremiumDialog<T>({
     required String title,
     IconData? icon,
@@ -217,10 +215,6 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     );
 
     await _engine.joinChannel(
-      // TEMP TOKEN: generated for roomId/channel = widget.roomId
-      // Valid for 24 hours from generation time. Must regenerate daily
-      // from Agora Console (Generate Temp Token) using the SAME channel name,
-      // then paste the new value here.
       token:
           "007eJxTYDA58ik/851bvuatSiaPIEUJnf7/s39P4kx4Oalsody1hJMKDKYGFmlpiUmpFmmWFiaJZmkWlubmliZpScnJySbJqcmWvbHZWQ2BjAwrp+QzMTEwgiGIL8LgY5iUlFpiVObtE1aWlZtameVTmMXAwARXwcJgaGBgCAAcJifI",
       channelId: widget.roomId,
@@ -260,7 +254,10 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     if (uid == null) return;
     final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     final userData = userDoc.data() ?? {};
-    final vipLevel = vipLevelForSpend(((userData['totalSent'] ?? 0) as num).toInt());
+    
+    // VIP Level based on totalRecharge (NOT totalSent)
+    final totalRecharge = (userData['totalRecharge'] ?? 0) as int;
+    final vipLevel = vipLevelForCoinsSync(totalRecharge);
 
     await _roomDoc.collection('audience').doc(uid).set({
       'uid': uid,
@@ -332,11 +329,6 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
   bool _isHost(Map<String, dynamic> roomData) => user?.uid != null && roomData['hostUid'] == user?.uid;
 
   // ---------------- Host's cover / announcement picture persistence ----------------
-  // The room document (and its coverImage/announcementImage) gets deleted
-  // once the room ends (see _deleteRoomIfEmpty), so without this the host
-  // would have to re-upload their cover + announcement picture every single
-  // time they start a new room. Instead, whenever the host sets one of these,
-  // we also save a copy under a per-host profile doc that outlives the room.
   Future<void> _saveHostDefaultImage(String field, String url) async {
     final uid = user?.uid;
     if (uid == null) return;
@@ -347,11 +339,6 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
         .catchError((_) {});
   }
 
-  // Called once when entering a room: if this user is the host and the room
-  // doesn't already have a cover / announcement picture set (e.g. a fresh
-  // room), restore the host's last-used ones from their profile so nothing
-  // is lost just because a previous room ended. Never overwrites values the
-  // host has already set for this room.
   Future<void> _restoreHostDefaultsIfNeeded() async {
     final uid = user?.uid;
     if (uid == null) return;
@@ -605,11 +592,6 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
   }
 
   // ---------------- Mic Mode sheet (seat layout, host-only) ----------------
-  // Opened from the "Mic Mode" tile in the apps grid. Not full-screen — a
-  // little over half the screen height — with a grid of seat-count choices.
-  // Picking one saves it on the room doc (so everyone sees the same seat
-  // layout) and vacates anyone currently sitting in a seat index that no
-  // longer exists under the new count (they're moved back to audience).
   Future<void> _openMicModeSheet(Map<String, dynamic> roomData) async {
     if (!_isHost(roomData)) return;
     final int current = _seatCountFor(roomData);
@@ -1324,7 +1306,10 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     final totalSent = ((userData['totalSent'] ?? 0) as num).toInt();
     final receivingLevel = _levelForCoins(totalGifts);
     final sendingLevel = _levelForCoins(totalSent);
-    final vipLevel = vipLevelForSpend(totalSent);
+    
+    // VIP Level based on totalRecharge (NOT totalSent)
+    final totalRecharge = (userData['totalRecharge'] ?? 0) as int;
+    final vipLevel = vipLevelForCoinsSync(totalRecharge);
 
     if (!mounted) return;
 
@@ -1694,13 +1679,18 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
           batch.delete(doc.reference);
         }
       }
+      
+      // VIP Level based on totalRecharge (NOT totalSent)
+      final totalRecharge = (userData['totalRecharge'] ?? 0) as int;
+      final vipLevel = vipLevelForCoinsSync(totalRecharge);
+      
       batch.set(_roomRef.doc(index.toString()), {
         'uid': uid,
         'name': userData['name'] ?? "User",
         'avatar': userData['avatar'] ?? "🧑",
         'avatarUrl': userData['avatarUrl'] ?? "",
         'isMuted': false,
-        'vipLevel': vipLevelForSpend(((userData['totalSent'] ?? 0) as num).toInt()),
+        'vipLevel': vipLevel,
       });
       await batch.commit();
 
@@ -1821,7 +1811,10 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
 
     final userDoc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
     final name = userDoc.data()?['name'] ?? "User";
-    final vipLevel = vipLevelForSpend(((userDoc.data()?['totalSent'] ?? 0) as num).toInt());
+    
+    // VIP Level based on totalRecharge
+    final totalRecharge = (userDoc.data()?['totalRecharge'] ?? 0) as int;
+    final vipLevel = vipLevelForCoinsSync(totalRecharge);
 
     await _roomDoc.collection('messages').add({
       'text': text,
@@ -1984,7 +1977,9 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     final isOccupied = data != null && data['uid'] != null;
     final isMe = isOccupied && data!['uid'] == user?.uid;
     final isMuted = data?['isMuted'] == true;
-    final vipLevel = isOccupied ? (((data!['vipLevel'] ?? 0) as num).toInt()) : 0;
+    
+    // VIP Level based on totalRecharge (NOT totalSent)
+    final vipLevel = isOccupied ? vipLevelForCoinsSync((data!['totalRecharge'] ?? 0) as int) : 0;
 
     return GestureDetector(
       onTap: () => _onSeatTap(index, data, roomData),
@@ -2091,7 +2086,9 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
   // crest around it, same tap/seat logic as every other seat.
   Widget _hostSeatWidget(Map<String, dynamic>? data, Map<String, dynamic> roomData) {
     final isOccupied = data != null && data['uid'] != null;
-    final vipLevel = isOccupied ? (((data!['vipLevel'] ?? 0) as num).toInt()) : 0;
+    
+    // VIP Level based on totalRecharge (NOT totalSent)
+    final vipLevel = isOccupied ? vipLevelForCoinsSync((data!['totalRecharge'] ?? 0) as int) : 0;
 
     return GestureDetector(
       onTap: () => _onSeatTap(0, data, roomData),
@@ -2235,6 +2232,7 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
     );
   }
 
+  // 🔥🔥🔥 CHAT SECTION WITH GIFT POPUP OVERLAY
   Widget _chatSection() {
     return Container(
       height: 260,
@@ -2247,145 +2245,156 @@ class _PartyRoomScreenState extends State<PartyRoomScreen> {
         ),
         border: Border(top: BorderSide(color: Colors.white.withOpacity(0.06))),
       ),
-      child: Column(
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: _roomDoc
-                  .collection('messages')
-                  .orderBy('createdAt', descending: true)
-                  .limit(50)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const SizedBox.shrink();
-                final docs = snapshot.data!.docs;
+          Column(
+            children: [
+              Expanded(
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: _roomDoc
+                      .collection('messages')
+                      .orderBy('createdAt', descending: true)
+                      .limit(50)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) return const SizedBox.shrink();
+                    final docs = snapshot.data!.docs;
 
-                return ListView.builder(
-                  reverse: true,
-                  itemCount: docs.length,
-                  itemBuilder: (context, index) {
-                    final data = docs[index].data() as Map<String, dynamic>;
-                    final isGift = data['type'] == 'gift';
-                    final isEntrance = data['type'] == 'entrance';
+                    return ListView.builder(
+                      reverse: true,
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final data = docs[index].data() as Map<String, dynamic>;
+                        final isGift = data['type'] == 'gift';
+                        final isEntrance = data['type'] == 'entrance';
 
-                    if (isEntrance) {
-                      final entranceLevel = ((data['senderVipLevel'] ?? 0) as num).toInt();
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: vipGradient(entranceLevel).map((c) => c.withOpacity(0.22)).toList(),
+                        if (isEntrance) {
+                          final entranceLevel = ((data['senderVipLevel'] ?? 0) as num).toInt();
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: vipGradient(entranceLevel).colors.map((c) => c.withOpacity(0.22)).toList(),
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: vipColor(entranceLevel).withOpacity(0.4)),
+                              ),
+                              child: Row(
+                                children: [
+                                  VipBadge(level: entranceLevel, fontSize: 10),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(
+                                      data['text'] ?? "",
+                                      style: TextStyle(
+                                        color: vipColor(entranceLevel),
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: vipColor(entranceLevel).withOpacity(0.4)),
-                          ),
-                          child: Row(
-                            children: [
-                              VipBadge(level: entranceLevel, fontSize: 10),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  data['text'] ?? "",
+                          );
+                        }
+
+                        if (isGift) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 3),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [Colors.pinkAccent.withOpacity(0.18), Colors.amberAccent.withOpacity(0.08)],
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.pinkAccent.withOpacity(0.25)),
+                              ),
+                              child: RichText(
+                                text: TextSpan(
+                                  children: [
+                                    TextSpan(
+                                      text: "${data['giftEmoji'] ?? '🎁'} ",
+                                      style: const TextStyle(fontSize: 13),
+                                    ),
+                                    TextSpan(
+                                      text: "${data['senderName'] ?? 'User'} ",
+                                      style: const TextStyle(
+                                          color: Colors.amberAccent, fontSize: 12.5, fontWeight: FontWeight.bold),
+                                    ),
+                                    const TextSpan(
+                                      text: "sent ",
+                                      style: TextStyle(color: Colors.white70, fontSize: 12.5),
+                                    ),
+                                    TextSpan(
+                                      text: "${data['receiverName'] ?? 'User'} ",
+                                      style: const TextStyle(
+                                          color: Colors.amberAccent, fontSize: 12.5, fontWeight: FontWeight.bold),
+                                    ),
+                                    TextSpan(
+                                      text: "a ${data['giftName'] ?? 'gift'}",
+                                      style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+
+                        final senderVipLevel = ((data['senderVipLevel'] ?? 0) as num).toInt();
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.04),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: RichText(
+                            text: TextSpan(
+                              children: [
+                                if (senderVipLevel > 0)
+                                  WidgetSpan(
+                                    alignment: PlaceholderAlignment.middle,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(right: 4),
+                                      child: VipBadge(level: senderVipLevel, fontSize: 9),
+                                    ),
+                                  ),
+                                TextSpan(
+                                  text: "${data['senderName'] ?? 'User'}: ",
                                   style: TextStyle(
-                                    color: vipColor(entranceLevel),
+                                    color: senderVipLevel > 0 ? vipColor(senderVipLevel) : Colors.amberAccent,
                                     fontSize: 12.5,
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    }
-
-                    if (isGift) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Colors.pinkAccent.withOpacity(0.18), Colors.amberAccent.withOpacity(0.08)],
-                            ),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: Colors.pinkAccent.withOpacity(0.25)),
-                          ),
-                          child: RichText(
-                            text: TextSpan(
-                              children: [
                                 TextSpan(
-                                  text: "${data['giftEmoji'] ?? '🎁'} ",
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                                TextSpan(
-                                  text: "${data['senderName'] ?? 'User'} ",
-                                  style: const TextStyle(
-                                      color: Colors.amberAccent, fontSize: 12.5, fontWeight: FontWeight.bold),
-                                ),
-                                const TextSpan(
-                                  text: "sent ",
-                                  style: TextStyle(color: Colors.white70, fontSize: 12.5),
-                                ),
-                                TextSpan(
-                                  text: "${data['receiverName'] ?? 'User'} ",
-                                  style: const TextStyle(
-                                      color: Colors.amberAccent, fontSize: 12.5, fontWeight: FontWeight.bold),
-                                ),
-                                TextSpan(
-                                  text: "a ${data['giftName'] ?? 'gift'}",
-                                  style: const TextStyle(color: Colors.white70, fontSize: 12.5),
+                                  text: data['text'] ?? "",
+                                  style: const TextStyle(color: Colors.white, fontSize: 12.5),
                                 ),
                               ],
                             ),
                           ),
-                        ),
-                      );
-                    }
-
-                    final senderVipLevel = ((data['senderVipLevel'] ?? 0) as num).toInt();
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.04),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: RichText(
-                        text: TextSpan(
-                          children: [
-                            if (senderVipLevel > 0)
-                              WidgetSpan(
-                                alignment: PlaceholderAlignment.middle,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: VipBadge(level: senderVipLevel, fontSize: 9),
-                                ),
-                              ),
-                            TextSpan(
-                              text: "${data['senderName'] ?? 'User'}: ",
-                              style: TextStyle(
-                                color: senderVipLevel > 0 ? vipColor(senderVipLevel) : Colors.amberAccent,
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            TextSpan(
-                              text: data['text'] ?? "",
-                              style: const TextStyle(color: Colors.white, fontSize: 12.5),
-                            ),
-                          ],
-                        ),
-                      ),
-                      ),
+                          ),
+                        );
+                      },
                     );
                   },
-                );
-              },
-            ),
+                ),
+              ),
+            ],
+          ),
+          // 🔥🔥🔥 GIFT POPUP OVERLAY
+          Positioned(
+            top: 4,
+            left: 4,
+            child: GiftPopupOverlay(roomId: widget.roomId),
           ),
         ],
       ),

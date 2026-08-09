@@ -543,33 +543,39 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
                 children: [
+                  // 🔥 1. Nickname
                   _settingsRow(
                     label: "Nickname",
                     value: nickname,
                     onTap: () => _editTextField("Nickname", nickname, (v) => nickname = v),
                   ),
+                  // 🔥 2. Gender
+                  _settingsRow(
+                    label: "Gender",
+                    value: gender,
+                    onTap: _pickGender,
+                  ),
+                  // 🔥 3. Birthdate (Age)
                   _settingsRow(
                     label: "Birthdate",
                     value: birthdate,
                     onTap: _pickBirthdate,
                   ),
+                  // 🔥 4. Personal Note (Birthdate ke neeche - EDITABLE)
                   _settingsRow(
                     label: "Personal Note",
                     value: personalNote,
                     onTap: () => _editTextField("Personal Note", personalNote, (v) => personalNote = v),
                   ),
                   const SizedBox(height: 10),
+                  // 🔥 5. User ID (non-editable)
                   _settingsRow(
                     label: "User ID",
                     value: userID,
                     onTap: () {},
                     enabled: false,
                   ),
-                  _settingsRow(
-                    label: "Gender",
-                    value: gender,
-                    onTap: _pickGender,
-                  ),
+                  // 🔥 6. Country/Region
                   _settingsRow(
                     label: "Country/Region",
                     value: country,
