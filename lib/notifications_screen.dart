@@ -25,8 +25,35 @@ class NotificationsScreen extends StatelessWidget {
     return "${diff.inDays}d ago";
   }
 
+  IconData _getIcon(String type) {
+    switch (type) {
+      case 'coin_topup':
+        return Icons.monetization_on;
+      case 'follow':
+        return Icons.person_add;
+      case 'message':
+        return Icons.chat_bubble;
+      default:
+        return Icons.notifications;
+    }
+  }
+
+  Color _getIconColor(String type) {
+    switch (type) {
+      case 'coin_topup':
+        return Colors.amberAccent;
+      case 'follow':
+        return Colors.greenAccent;
+      case 'message':
+        return Colors.blueAccent;
+      default:
+        return Colors.amberAccent;
+    }
+  }
+
   void _openDetail(BuildContext context, Map<String, dynamic> data) {
-    final isTopup = data['type'] == 'coin_topup';
+    final type = data['type'] ?? '';
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1B1930),
@@ -44,10 +71,10 @@ class NotificationsScreen extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.amberAccent.withOpacity(0.15),
+                    color: _getIconColor(type).withOpacity(0.15),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.monetization_on, color: Colors.amberAccent),
+                  child: Icon(_getIcon(type), color: _getIconColor(type)),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -59,7 +86,7 @@ class NotificationsScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 18),
-            if (isTopup) ...[
+            if (type == 'coin_topup') ...[
               _detailRow("Transaction ID", data['transactionId']?.toString() ?? "-"),
               _detailRow("Coins Added", "+${data['coinsAdded'] ?? 0}"),
               _detailRow("Sender Name", data['senderName']?.toString() ?? "-"),
@@ -67,6 +94,14 @@ class NotificationsScreen extends StatelessWidget {
               _detailRow("Current Balance", data['balanceAfter']?.toString() ?? "-"),
               _detailRow("Status", data['status']?.toString() ?? "-",
                   valueColor: (data['status'] == "Success") ? Colors.greenAccent : Colors.redAccent),
+            ] else if (type == 'follow') ...[
+              _detailRow("User", data['senderName']?.toString() ?? "-"),
+              _detailRow("Action", "Started following you"),
+              _detailRow("Date & Time", _timeAgo(data['timestamp'] as Timestamp?)),
+            ] else if (type == 'message') ...[
+              _detailRow("From", data['senderName']?.toString() ?? "-"),
+              _detailRow("Message", data['messagePreview']?.toString() ?? data['body'] ?? ""),
+              _detailRow("Date & Time", _timeAgo(data['timestamp'] as Timestamp?)),
             ] else
               Text(data['body'] ?? "", style: const TextStyle(color: Colors.white70, fontSize: 14)),
             const SizedBox(height: 10),
@@ -141,6 +176,7 @@ class NotificationsScreen extends StatelessWidget {
               final data = doc.data() as Map<String, dynamic>;
               final isRead = data['read'] == true;
               final ts = data['timestamp'] as Timestamp?;
+              final type = data['type'] ?? '';
 
               return InkWell(
                 borderRadius: BorderRadius.circular(14),
@@ -151,10 +187,10 @@ class NotificationsScreen extends StatelessWidget {
                 child: Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: isRead ? Colors.white.withOpacity(0.04) : Colors.amberAccent.withOpacity(0.08),
+                    color: isRead ? Colors.white.withOpacity(0.04) : _getIconColor(type).withOpacity(0.08),
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: isRead ? Colors.white.withOpacity(0.08) : Colors.amberAccent.withOpacity(0.35),
+                      color: isRead ? Colors.white.withOpacity(0.08) : _getIconColor(type).withOpacity(0.35),
                     ),
                   ),
                   child: Row(
@@ -162,10 +198,10 @@ class NotificationsScreen extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.all(9),
                         decoration: BoxDecoration(
-                          color: Colors.amberAccent.withOpacity(0.15),
+                          color: _getIconColor(type).withOpacity(0.15),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.monetization_on, color: Colors.amberAccent, size: 18),
+                        child: Icon(_getIcon(type), color: _getIconColor(type), size: 18),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -196,7 +232,7 @@ class NotificationsScreen extends StatelessWidget {
                         Container(
                           width: 8,
                           height: 8,
-                          decoration: const BoxDecoration(color: Colors.amberAccent, shape: BoxShape.circle),
+                          decoration: BoxDecoration(color: _getIconColor(type), shape: BoxShape.circle),
                         ),
                     ],
                   ),

@@ -1,7 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-import 'user_profile_popup.dart';
+import 'profile_screen.dart';
 
 /// Push this screen when the user taps the search icon on the home page:
 ///   Navigator.push(context, MaterialPageRoute(builder: (_) => const SearchUserScreen()));
@@ -36,12 +36,10 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
     });
 
     try {
-      // Prefix search on userID (e.g. typing "102" matches "1024", "1025"...)
+      // 🔥 EXACT MATCH search on userID (not prefix search)
       final snap = await _firestore
           .collection('users')
-          .orderBy('userID')
-          .startAt([query])
-          .endAt(['$query\uf8ff'])
+          .where('userID', isEqualTo: query)
           .limit(30)
           .get();
 
@@ -132,7 +130,15 @@ class _SearchUserScreenState extends State<SearchUserScreen> {
             gender == 'female' ? Icons.female : Icons.male,
             color: gender == 'female' ? Colors.pinkAccent : Colors.blueAccent,
           ),
-          onTap: () => showUserProfilePopup(context, data, doc.id),
+          // 🔥 CHANGED: Popup ki jagah full ProfileScreen open karein
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => ProfileScreen(targetUserId: doc.id),
+              ),
+            );
+          },
         );
       },
     );

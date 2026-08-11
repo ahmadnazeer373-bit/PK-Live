@@ -4,20 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'Screen/live_room_screen.dart';
 import 'Screen/party_screen.dart';
-
-// ASSUMPTIONS (adjust if your Firestore schema differs):
-// - Collection: 'users'
-// - Field 'isLive' (bool)      -> true when the user is currently live
-// - Field 'totalGifts' (number) -> running total of gifts/points received
-//   Sorting is done by totalGifts DESC, so the top-gifted host always
-//   surfaces first on every load/refresh automatically.
-// - Optional fields: 'name', 'avatar' (emoji/url), 'viewers' (int),
-//   'flag' (emoji), 'tag' ("PK" | "NEW HOST" | null)
-// - Field 'agencyId' (string, nullable) -> set once the user joins an
-//   agency. The Go-Live camera button only appears once this field is
-//   non-empty. No agency system exists yet — once it's built, simply set
-//   this field on the user's document when they join an agency and the
-//   button will start showing automatically, no further code changes needed.
+import 'profile_screen.dart'; // 🔥 ADD THIS IMPORT
 
 const int _pageSize = 60;
 
@@ -97,10 +84,6 @@ class _HomeScreenState extends State<HomeScreen> {
   bool isSearching = false;
   final TextEditingController searchController = TextEditingController();
 
-  // Search-by-User-ID (works across ALL users, not just the ones already
-  // loaded in the home feed — searches Firestore directly on the 'userID'
-  // field, which is a distinct sequential ID separate from the Firebase
-  // Auth uid used for the document's own id).
   Timer? _idSearchDebounce;
   LiveUser? _idSearchResult;
   bool _idSearchLoading = false;
@@ -250,78 +233,13 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // 🔥 CHANGED: Bottom sheet ki jagah ProfileScreen open karein
   void _openSearchedUserProfile(LiveUser user) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: const Color(0xFF1A1A2E),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 30,
-                      backgroundColor: Colors.white.withOpacity(0.08),
-                      child: Text(user.image, style: const TextStyle(fontSize: 26)),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(user.name,
-                              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 3),
-                          Text("ID: ${user.userID}",
-                              style: const TextStyle(color: Colors.white54, fontSize: 12)),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: user.isLive ? Colors.redAccent : Colors.white12,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        user.isLive ? "LIVE" : "OFFLINE",
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: user.isLive ? Colors.redAccent : Colors.white12,
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                    onPressed: user.isLive
-                        ? () {
-                            Navigator.pop(context);
-                            openLiveRoom(context, user.name);
-                          }
-                        : null,
-                    child: Text(
-                      user.isLive ? "Join Live Room" : "This user isn't live right now",
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ProfileScreen(targetUserId: user.id),
+      ),
     );
   }
 
@@ -591,8 +509,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Top-gifted hosts strip (first N of the sorted-by-gifts list, so this
-  // also naturally reflects whoever is receiving the most gifts right now).
   Widget _liveAvatarsRow() {
     final topHosts = liveUsers.take(12).toList();
     if (topHosts.isEmpty) return const SizedBox.shrink();
@@ -696,7 +612,6 @@ class _HomeScreenState extends State<HomeScreen> {
             Center(
               child: Text(user.image, style: const TextStyle(fontSize: 72)),
             ),
-            // Top-left viewer count
             Positioned(
               top: 8,
               left: 8,
@@ -719,7 +634,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-            // Top-right tag (PK or flag)
             if (user.tag == "PK")
               Positioned(
                 top: 8,
@@ -742,7 +656,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 right: 8,
                 child: Text(user.flag, style: const TextStyle(fontSize: 16)),
               ),
-            // New host ribbon
             if (user.tag == "NEW HOST")
               Positioned(
                 top: 10,
@@ -761,14 +674,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-            // Top-gifted rank badge (crown for #1 overall)
             if (rank == 0)
               Positioned(
                 top: 8,
                 left: 8,
                 child: Text("👑", style: const TextStyle(fontSize: 16)),
               ),
-            // Bottom name overlay
             Positioned(
               bottom: 0,
               left: 0,
@@ -857,7 +768,6 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.camera_alt, color: Colors.white, size: 26),
             tooltip: "Go Live",
             onPressed: () {
-              // TODO: wire this to your actual Go-Live flow/screen once it's built.
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text("Go Live flow isn't connected yet")),
               );

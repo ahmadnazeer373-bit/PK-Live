@@ -116,6 +116,25 @@ class _ChatScreenState extends State<ChatScreen> {
         'lastMessageTime': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
+      // 🔥 MESSAGE NOTIFICATION
+      final notificationRef = FirebaseFirestore.instance
+          .collection('notifications')
+          .doc(widget.otherUserId)
+          .collection('items')
+          .doc();
+
+      await notificationRef.set({
+        'type': 'message',
+        'title': 'New Message',
+        'body': '$myName: $text',
+        'senderId': myUid,
+        'senderName': myName,
+        'messagePreview': text,
+        'chatId': chatId,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      });
+
       _scrollToBottom();
     } catch (e) {
       if (mounted) {

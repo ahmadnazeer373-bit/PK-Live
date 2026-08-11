@@ -26,6 +26,7 @@ subprojects {
             if (extensions.findByName("android") != null) {
                 extensions.configure<BaseExtension> {
                     compileSdkVersion(36)
+                    ndkVersion = "26.1.10909125"
                 }
             }
         }

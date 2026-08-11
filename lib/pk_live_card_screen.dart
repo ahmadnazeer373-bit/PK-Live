@@ -1,15 +1,56 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'vip_utils.dart';
+import 'services/level_service.dart';
 
 /// A premium virtual "PK-Live" membership card for the current user —
 /// mirrors the same identity details shown below the name on the Profile
 /// screen (ID, country, friends/followers/following, age, gender, send &
 /// receive level, and badges), styled to match the app's dark/gold theme.
-class PkLiveCardScreen extends StatelessWidget {
+class PkLiveCardScreen extends StatefulWidget {
   const PkLiveCardScreen({super.key});
 
+  @override
+  State<PkLiveCardScreen> createState() => _PkLiveCardScreenState();
+}
+
+class _PkLiveCardScreenState extends State<PkLiveCardScreen> {
+  List<Map<String, dynamic>> _levelRules = [];
+
   User? get _user => FirebaseAuth.instance.currentUser;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLevelRules();
+  }
+
+  Future<void> _loadLevelRules() async {
+    try {
+      final sendingRules = await LevelService.instance.getLevelRules(type: 'sending');
+      final receivingRules = await LevelService.instance.getLevelRules(type: 'receiving');
+      setState(() {
+        _levelRules = [...sendingRules, ...receivingRules];
+      });
+    } catch (e) {
+      print("❌ Error loading level rules: $e");
+    }
+  }
+
+  Color _getLevelColor(int level) {
+    for (final rule in _levelRules) {
+      if (rule['level'] == level) {
+        final colorHex = rule['color'] ?? '#FFD700';
+        try {
+          return Color(int.parse(colorHex.replaceAll('#', '0xFF')));
+        } catch (_) {
+          return Colors.amber;
+        }
+      }
+    }
+    return Colors.grey;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +87,6 @@ class PkLiveCardScreen extends StatelessWidget {
                   final avatar = data['avatar'] ?? "🧑";
                   final avatarUrl = data['avatarUrl'] as String?;
                   final userID = data['userID']?.toString() ?? uid;
-                  final level = data['level']?.toString() ?? "1";
 
                   // Same fields/fallbacks used below the name on the Profile screen.
                   final country = data['country'] ?? "";
@@ -55,8 +95,17 @@ class PkLiveCardScreen extends StatelessWidget {
                   final followingCount = (data['followingCount'] ?? 0).toString();
                   final age = data['age']?.toString();
                   final gender = (data['gender'] as String?)?.toLowerCase();
-                  final sendLevel = data['sendLevel']?.toString() ?? data['sendingLevel']?.toString() ?? "1";
-                  final receiveLevel = data['receiveLevel']?.toString() ?? data['receivingLevel']?.toString() ?? "1";
+                  
+                  // 🔥 Sending & Receiving Level - Profile screen ki tarah
+                  final sendLevel = data['sendingLevel'] ?? 1;
+                  final receiveLevel = data['receivingLevel'] ?? 1;
+                  
+                  // 🔥 VIP Level - Lifetime RECHARGE amount se calculate (totalRecharge)
+                  final totalRecharge = (data['totalRecharge'] ?? 0) as int;
+                  final vipLevel = vipLevelForCoinsSync(totalRecharge);
+
+                  final sendColor = _getLevelColor(sendLevel);
+                  final receiveColor = _getLevelColor(receiveLevel);
 
                   IconData? genderIcon;
                   Color genderColor = Colors.white54;
@@ -175,7 +224,7 @@ class PkLiveCardScreen extends StatelessWidget {
                                                 ],
                                               ),
                                               child: Text(
-                                                "Lv.$level",
+                                                "Lv.$sendLevel",
                                                 style: const TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold),
                                               ),
                                             ),
@@ -248,20 +297,34 @@ class PkLiveCardScreen extends StatelessWidget {
                                         ),
                                         const SizedBox(height: 16),
 
-                                        // ---------- Age / Gender / Send level / Receive level ----------
+                                        // ---------- 🔥 Age / VIP / Gender / Sending / Receiving (Profile screen ki tarah) ----------
                                         Wrap(
                                           spacing: 10,
                                           runSpacing: 8,
                                           children: [
-                                            if (age != null) _iconValuePill(icon: Icons.cake, value: age, color: Colors.amberAccent),
+                                            if (age != null && age != 'null' && age != '')
+                                              _iconValuePill(icon: Icons.cake, value: age, color: Colors.amberAccent),
+                                            _iconValuePill(
+                                              icon: Icons.workspace_premium,
+                                              value: vipLevel > 0 ? "VIP $vipLevel" : "VIP 0",
+                                              color: vipLevel > 0 ? Colors.amber : Colors.grey,
+                                            ),
                                             if (genderIcon != null)
                                               _iconValuePill(
                                                 icon: genderIcon,
                                                 value: gender == 'male' ? "Male" : "Female",
                                                 color: genderColor,
                                               ),
-                                            _iconValuePill(icon: Icons.arrow_upward, value: sendLevel, color: const Color(0xFF7CD992)),
-                                            _iconValuePill(icon: Icons.arrow_downward, value: receiveLevel, color: const Color(0xFF7CB8FF)),
+                                            _iconValuePill(
+                                              icon: Icons.diamond,
+                                              value: "$sendLevel",
+                                              color: sendColor,
+                                            ),
+                                            _iconValuePill(
+                                              icon: Icons.favorite,
+                                              value: "$receiveLevel",
+                                              color: receiveColor,
+                                            ),
                                           ],
                                         ),
                                         const SizedBox(height: 14),
@@ -270,8 +333,8 @@ class PkLiveCardScreen extends StatelessWidget {
                                         Wrap(
                                           spacing: 8,
                                           children: [
-                                            _badge("Lv.1", Colors.blueAccent),
-                                            _badge("New Member", Colors.pinkAccent),
+                                            _badge("Lv.$sendLevel", sendColor),
+                                            _badge("PK-Live", Colors.amberAccent),
                                           ],
                                         ),
                                         const SizedBox(height: 16),

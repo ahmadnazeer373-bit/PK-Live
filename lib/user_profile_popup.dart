@@ -98,6 +98,26 @@ class _UserProfilePopupState extends State<UserProfilePopup> {
       batch.set(theirFollowerRef, {'timestamp': FieldValue.serverTimestamp()});
       batch.update(myUserRef, {'followingCount': FieldValue.increment(1)});
       batch.update(theirUserRef, {'followersCount': FieldValue.increment(1)});
+
+      // 🔥 FOLLOW NOTIFICATION
+      final myData = await _firestore.collection('users').doc(_currentUid).get();
+      final myName = myData.data()?['name'] ?? 'User';
+
+      final notificationRef = _firestore
+          .collection('notifications')
+          .doc(widget.targetUid)
+          .collection('items')
+          .doc();
+
+      batch.set(notificationRef, {
+        'type': 'follow',
+        'title': 'New Follower',
+        'body': '$myName started following you',
+        'senderId': _currentUid,
+        'senderName': myName,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      });
     }
 
     try {

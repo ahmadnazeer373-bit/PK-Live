@@ -48,7 +48,6 @@ dependencies:
 
 
   # Party room voice chat
-  agora_rtc_engine: ^6.6.3
   permission_handler: ^11.3.1
 
 
@@ -67,6 +66,12 @@ dependencies:
   # Video player for gift videos
   video_player: ^2.8.0
 
+
+  # Cached network image for better image loading
+  cached_network_image: ^3.3.1
+  
+  # 🔥 Agora RTC Engine - Version 6.3.0 (NDK Compatible)
+  agora_rtc_engine: ^6.3.0
 
 
 dev_dependencies:

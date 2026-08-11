@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'auth_screen.dart';
 
 // NOTE: Replace the [Insert ...] placeholders inside _termsAndConditionsText
@@ -49,6 +50,80 @@ class SettingsScreen extends StatelessWidget {
         );
       }
     }
+  }
+
+  // TEMPORARY ADMIN FUNCTION — recalculates followersCount/followingCount
+  // for every user from the actual following/followers subcollection data,
+  // fixing any counts that drifted out of sync during earlier testing.
+  // Remove this button + function once counts are confirmed correct.
+  Future<void> _recalculateAllCounts(BuildContext context) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        backgroundColor: Color(0xFF1B1930),
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(width: 20),
+            Expanded(
+              child: Text(
+                "Recalculating counts...",
+                style: TextStyle(color: Colors.white),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    final firestore = FirebaseFirestore.instance;
+    int processed = 0;
+    String? errorMessage;
+
+    try {
+      final usersSnap = await firestore.collection('users').get();
+
+      for (final userDoc in usersSnap.docs) {
+        final userId = userDoc.id;
+
+        final followingSnap = await firestore
+            .collection('users')
+            .doc(userId)
+            .collection('following')
+            .get();
+        final followingCount = followingSnap.docs.length;
+
+        final followersSnap = await firestore
+            .collectionGroup('following')
+            .where('targetUserId', isEqualTo: userId)
+            .get();
+        final followersCount = followersSnap.docs.length;
+
+        await firestore.collection('users').doc(userId).update({
+          'followingCount': followingCount,
+          'followersCount': followersCount,
+        });
+
+        processed++;
+      }
+    } catch (e) {
+      errorMessage = e.toString();
+    }
+
+    if (!context.mounted) return;
+    Navigator.of(context).pop(); // close the progress dialog
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          errorMessage == null
+              ? "Fixed counts for $processed users"
+              : "Stopped after $processed users — error: $errorMessage",
+        ),
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   @override
@@ -121,6 +196,27 @@ class SettingsScreen extends StatelessWidget {
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 side: const BorderSide(color: Colors.redAccent),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          // TEMPORARY — remove this button once follower/following counts
+          // are confirmed correct for all users. See _recalculateAllCounts.
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () => _recalculateAllCounts(context),
+              icon: const Icon(Icons.build_outlined, color: Colors.amber),
+              label: const Text(
+                "Fix Follower/Following Counts (Admin)",
+                style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold),
+              ),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                side: const BorderSide(color: Colors.amber),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(30),
                 ),

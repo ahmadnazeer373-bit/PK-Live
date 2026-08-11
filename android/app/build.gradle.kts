@@ -1,14 +1,14 @@
 plugins {
     id("com.android.application")
     id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "com.directsurveillance.pk_live"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = "27.0.12077973" 
+    compileSdk = 36  // 🔥 34 se 36
+    ndkVersion = "26.1.10909125"
+    
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -21,9 +21,19 @@ android {
     defaultConfig {
         applicationId = "com.directsurveillance.pk_live"
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        targetSdk = 36  // 🔥 34 se 36
+        versionCode = 1
+        versionName = "1.0.0"
+        
+        ndk {
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+        }
+    }
+
+    // 🔥 Agora Fix
+    packaging {
+        jniLibs.pickFirsts.add("**/libiris_rendering_android.so")
+        jniLibs.pickFirsts.add("**/libc++_shared.so")
     }
 
     buildTypes {

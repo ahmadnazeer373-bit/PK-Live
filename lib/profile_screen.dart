@@ -20,11 +20,17 @@ import 'Screen/vip_center_screen.dart';
 import 'Screen/level_rules_screen.dart';
 import 'services/level_service.dart';
 import 'vip_utils.dart';
+import 'screen/chat_screen.dart';
+import 'Screen/create_post_screen.dart';
+import 'widgets/post_card.dart';
+import 'follow_list_screen.dart';
 
 const String _adminUid = "1dd7eMMAm9dp6QqOzQsr5eJXPjB2";
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  final String? targetUserId;
+
+  const ProfileScreen({super.key, this.targetUserId});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -35,13 +41,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isAssigningUserId = false;
   bool _isCreatingRoom = false;
   List<Map<String, dynamic>> _levelRules = [];
+  
+  bool _isFollowing = false;
+  bool _isFollowLoading = false;
 
-  User? get user => FirebaseAuth.instance.currentUser;
+  String get _userIdToShow {
+    if (widget.targetUserId != null && widget.targetUserId!.isNotEmpty) {
+      return widget.targetUserId!;
+    }
+    return FirebaseAuth.instance.currentUser?.uid ?? '';
+  }
+
+  bool get _isOwnProfile {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    return widget.targetUserId == null ||
+        widget.targetUserId!.isEmpty ||
+        widget.targetUserId == currentUid;
+  }
 
   @override
   void initState() {
     super.initState();
     _loadLevelRules();
+    if (!_isOwnProfile) {
+      _checkFollowStatus();
+    }
   }
 
   @override
@@ -77,7 +101,193 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _refreshProfile() async {
     await _loadLevelRules();
+    if (!_isOwnProfile) {
+      await _checkFollowStatus();
+    }
     setState(() {});
+  }
+
+  // 🔥 FIXED: Sirf following subcollection check karein
+  Future<void> _checkFollowStatus() async {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null || _userIdToShow.isEmpty) return;
+
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUid)
+          .collection('following')
+          .doc(_userIdToShow)
+          .get();
+
+      if (mounted) {
+        setState(() {
+          _isFollowing = doc.exists;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error checking follow status: $e");
+    }
+  }
+
+  // 🔥 FIXED: Sirf following subcollection use karein
+  Future<void> _toggleFollow() async {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null || _userIdToShow.isEmpty || _isFollowLoading) return;
+
+    setState(() => _isFollowLoading = true);
+
+    try {
+      final currentUserRef = FirebaseFirestore.instance.collection('users').doc(currentUid);
+      final targetUserRef = FirebaseFirestore.instance.collection('users').doc(_userIdToShow);
+      
+      // 🔥 SIRF following SUBCOLLECTION USE KAREIN
+      final followRef = currentUserRef.collection('following').doc(_userIdToShow);
+
+      if (_isFollowing) {
+        // 🔥 UNFOLLOW
+        await followRef.delete();
+        
+        await currentUserRef.update({
+          'followingCount': FieldValue.increment(-1),
+        });
+        await targetUserRef.update({
+          'followersCount': FieldValue.increment(-1),
+        });
+
+        if (mounted) {
+          setState(() => _isFollowing = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Unfollowed")),
+          );
+        }
+      } else {
+        // 🔥 FOLLOW - Sirf following subcollection mein add
+        await followRef.set({
+          'followedAt': FieldValue.serverTimestamp(),
+          'targetUserId': _userIdToShow,
+        });
+
+        await currentUserRef.update({
+          'followingCount': FieldValue.increment(1),
+        });
+        await targetUserRef.update({
+          'followersCount': FieldValue.increment(1),
+        });
+
+        if (mounted) {
+          setState(() => _isFollowing = true);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Followed!")),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isFollowLoading = false);
+    }
+  }
+
+  void _openChat() async {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null) return;
+    
+    if (_userIdToShow == currentUid) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("You can't chat with yourself")),
+      );
+      return;
+    }
+
+    setState(() => _isFollowLoading = true);
+
+    try {
+      final followingDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUid)
+          .collection('following')
+          .doc(_userIdToShow)
+          .get();
+
+      final followerDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_userIdToShow)
+          .collection('following')
+          .doc(currentUid)
+          .get();
+
+      final iFollowThem = followingDoc.exists;
+      final theyFollowMe = followerDoc.exists;
+
+      if (!iFollowThem || !theyFollowMe) {
+        await showDialog(
+          context: context,
+          barrierDismissible: true,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF1B1930),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: const Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.amberAccent),
+                SizedBox(width: 10),
+                Text(
+                  "Cannot Message",
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            content: const Text(
+              "You can only message users who follow you back.\n\nPlease follow them and ask them to follow you to start chatting.",
+              style: TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  "Got it",
+                  style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+        );
+        setState(() => _isFollowLoading = false);
+        return;
+      }
+
+      final userRef = FirebaseFirestore.instance.collection('users').doc(_userIdToShow);
+      final doc = await userRef.get();
+      if (doc.exists) {
+        final data = doc.data() as Map<String, dynamic>? ?? {};
+        final name = data['name'] ?? 'User';
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatScreen(
+                otherUserId: _userIdToShow,
+                otherUserName: name,
+              ),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isFollowLoading = false);
+    }
   }
 
   Future<String> _getNextUserId() async {
@@ -115,8 +325,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _openMyRoom() async {
-    final uid = user?.uid;
-    if (uid == null || _isCreatingRoom) return;
+    final uid = _userIdToShow;
+    if (uid.isEmpty || _isCreatingRoom) return;
+
+    if (!_isOwnProfile) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("You can only open your own room")),
+      );
+      return;
+    }
 
     final query = await FirebaseFirestore.instance
         .collection('party_rooms')
@@ -232,14 +449,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  void _navigateToCreatePost() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const CreatePostScreen(),
+      ),
+    );
+  }
+
+  void _navigateToFollowList(FollowListType type) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => FollowListScreen(
+          userId: _userIdToShow,
+          listType: type,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final uid = user?.uid;
+    final uid = _userIdToShow;
 
-    if (uid == null) {
+    if (uid.isEmpty) {
       return const Scaffold(
         backgroundColor: Colors.black,
-        body: Center(child: Text("Login required", style: TextStyle(color: Colors.white))),
+        body: Center(child: Text("User not found", style: TextStyle(color: Colors.white))),
       );
     }
 
@@ -262,7 +500,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               );
             }
-            if (!snapshot.hasData) {
+            if (!snapshot.hasData || !snapshot.data!.exists) {
               return const Center(child: CircularProgressIndicator(color: Colors.redAccent));
             }
 
@@ -274,7 +512,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             final coverPhotoUrl = data['coverPhotoUrl'] as String?;
             final name = data['name'] ?? "User";
             final userID = data['userID'] ?? "";
-            if (userID.isEmpty) {
+            if (userID.isEmpty && _isOwnProfile) {
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 _backfillUserIdIfMissing(uid, userID);
               });
@@ -283,7 +521,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             final personalNote = data['bio'] ?? "";
 
             final coins = (data['coins'] ?? 0).toString();
-            // 🔥 Earned Coins - 'earnedCoins' field se read karein
             final earnedCoins = (data['earnedCoins'] ?? 0).toString();
             final ownedAgencyId = data['ownedAgencyId'] as String?;
             final agencyId = data['agencyId'] as String?;
@@ -300,7 +537,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             final sendLevel = data['sendingLevel'] ?? 1;
             final receiveLevel = data['receivingLevel'] ?? 1;
             
-            // 🔥 VIP Level - Lifetime RECHARGE amount se calculate (totalRecharge)
             final totalRecharge = (data['totalRecharge'] ?? 0) as int;
             final vipLevel = vipLevelForCoinsSync(totalRecharge);
 
@@ -342,7 +578,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Stack
                     Stack(
                       clipBehavior: Clip.none,
                       children: [
@@ -383,65 +618,67 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             onPressed: () => Navigator.maybePop(context),
                           ),
                         ),
-                        Positioned(
-                          top: 40,
-                          right: 60,
-                          child: StreamBuilder<QuerySnapshot>(
-                            stream: FirebaseFirestore.instance
-                                .collection('notifications')
-                                .doc(uid)
-                                .collection('items')
-                                .where('read', isEqualTo: false)
-                                .snapshots(),
-                            builder: (context, notifSnapshot) {
-                              final unreadCount = notifSnapshot.data?.docs.length ?? 0;
-                              return Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.notifications_outlined, color: Colors.white),
-                                    onPressed: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const NotificationsScreen()),
-                                      );
-                                    },
-                                  ),
-                                  if (unreadCount > 0)
-                                    Positioned(
-                                      top: 6,
-                                      right: 6,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                        decoration: BoxDecoration(
-                                          color: Colors.redAccent,
-                                          borderRadius: BorderRadius.circular(10),
-                                          border: Border.all(color: const Color(0xFF0E0C18), width: 1.5),
-                                        ),
-                                        child: Text(
-                                          unreadCount > 9 ? "9+" : "$unreadCount",
-                                          style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                        if (_isOwnProfile)
+                          Positioned(
+                            top: 40,
+                            right: 60,
+                            child: StreamBuilder<QuerySnapshot>(
+                              stream: FirebaseFirestore.instance
+                                  .collection('notifications')
+                                  .doc(uid)
+                                  .collection('items')
+                                  .where('read', isEqualTo: false)
+                                  .snapshots(),
+                              builder: (context, notifSnapshot) {
+                                final unreadCount = notifSnapshot.data?.docs.length ?? 0;
+                                return Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.notifications_outlined, color: Colors.white),
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+                                        );
+                                      },
+                                    ),
+                                    if (unreadCount > 0)
+                                      Positioned(
+                                        top: 6,
+                                        right: 6,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: Colors.redAccent,
+                                            borderRadius: BorderRadius.circular(10),
+                                            border: Border.all(color: const Color(0xFF0E0C18), width: 1.5),
+                                          ),
+                                          child: Text(
+                                            unreadCount > 9 ? "9+" : "$unreadCount",
+                                            style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                ],
-                              );
-                            },
+                                  ],
+                                );
+                              },
+                            ),
                           ),
-                        ),
-                        Positioned(
-                          top: 40,
-                          right: 16,
-                          child: IconButton(
-                            icon: const Icon(Icons.edit, color: Colors.white),
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (context) => const EditProfileScreen()),
-                              );
-                            },
+                        if (_isOwnProfile)
+                          Positioned(
+                            top: 40,
+                            right: 16,
+                            child: IconButton(
+                              icon: const Icon(Icons.edit, color: Colors.white),
+                              onPressed: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (context) => const EditProfileScreen()),
+                                );
+                              },
+                            ),
                           ),
-                        ),
                         Positioned(
                           bottom: -45,
                           left: 20,
@@ -480,6 +717,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ],
                     ),
                     const SizedBox(height: 55),
+                    
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: Column(
@@ -521,16 +759,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                           Row(
                             children: [
-                              _socialCount(friendsCount, "Friends"),
+                              _socialCountClickable(friendsCount, "Friends", FollowListType.friends),
                               _socialDivider(),
-                              _socialCount(followersCount, "Followers"),
+                              _socialCountClickable(followersCount, "Followers", FollowListType.followers),
                               _socialDivider(),
-                              _socialCount(followingCount, "Following"),
+                              _socialCountClickable(followingCount, "Following", FollowListType.following),
                             ],
                           ),
                           const SizedBox(height: 14),
 
-                          // 🔥 Age, VIP, Gender, Sending, Receiving
                           Wrap(
                             spacing: 10,
                             runSpacing: 8,
@@ -562,7 +799,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // 🔥 Personal Note - Read-only display
                           if (personalNote.isNotEmpty) ...[
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -596,302 +832,395 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             const SizedBox(height: 16),
                           ],
 
-                          // 🔥 Tabs
-                          Row(
-                            children: [
-                              _tabButton("About me", 0),
-                              const SizedBox(width: 20),
-                              _tabButton("Moment", 1),
+                          if (_isOwnProfile) ...[
+                            StreamBuilder<QuerySnapshot>(
+                              stream: FirebaseFirestore.instance
+                                  .collection('plaza_posts')
+                                  .where('userId', isEqualTo: uid)
+                                  .snapshots(),
+                              builder: (context, snapshot) {
+                                final count = snapshot.hasData ? snapshot.data!.docs.length : 0;
+                                return Row(
+                                  children: [
+                                    _tabButton("About me", 0),
+                                    const SizedBox(width: 20),
+                                    _tabButton("Moment", 1, count: count.toString()),
+                                  ],
+                                );
+                              },
+                            ),
+                            const Divider(color: Colors.white12, height: 24),
+                            
+                            if (selectedTab == 0) ...[
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _walletStatCard(
+                                      icon: Icons.monetization_on,
+                                      label: "Coins",
+                                      value: coins,
+                                      color: Colors.amberAccent,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: _walletStatCard(
+                                      icon: Icons.monetization_on_outlined,
+                                      label: "Earned Coins",
+                                      value: earnedCoins,
+                                      color: Colors.greenAccent,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 14),
+
+                              SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    if (ownedAgencyId != null) {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const AgencyOwnerDashboard()),
+                                      );
+                                    } else if (agencyId != null) {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const HostCenterScreen()),
+                                      );
+                                    } else {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const BecomeHostScreen()),
+                                      );
+                                    }
+                                  },
+                                  icon: Icon(
+                                    ownedAgencyId != null
+                                        ? Icons.dashboard_customize
+                                        : (agencyId != null ? Icons.mic_external_on : Icons.workspace_premium),
+                                    color: Colors.amberAccent,
+                                  ),
+                                  label: Text(
+                                    ownedAgencyId != null
+                                        ? "Agency Dashboard"
+                                        : (agencyId != null ? "Host Center" : "Become a Host"),
+                                    style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    backgroundColor: Colors.amberAccent.withOpacity(0.10),
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    side: const BorderSide(color: Colors.amberAccent),
+                                    elevation: 0,
+                                    shadowColor: Colors.amberAccent.withOpacity(0.3),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+
+                              _buildPremiumGrid(),
+
+                              const SizedBox(height: 16),
+
+                              Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [Colors.white.withOpacity(0.07), Colors.white.withOpacity(0.03)],
+                                  ),
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                                  boxShadow: [
+                                    BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 12, offset: const Offset(0, 6)),
+                                  ],
+                                ),
+                                child: Column(
+                                  children: [
+                                    _menuListTile(
+                                      icon: Icons.meeting_room_outlined,
+                                      label: "My Room",
+                                      onTap: _openMyRoom,
+                                    ),
+                                    const Divider(color: Colors.white12, height: 1, indent: 56),
+                                    _menuListTile(
+                                      icon: Icons.badge_outlined,
+                                      label: "My PK-Live Card",
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(builder: (context) => const PkLiveCardScreen()),
+                                        );
+                                      },
+                                    ),
+                                    const Divider(color: Colors.white12, height: 1, indent: 56),
+                                    _menuListTile(
+                                      icon: Icons.settings_outlined,
+                                      label: "Setting",
+                                      onTap: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(builder: (context) => const SettingsScreen()),
+                                        );
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 24),
+
+                              // BOTTOM ICONS (Points, Pulsation, Pending)
+                              Container(
+                                padding: const EdgeInsets.symmetric(vertical: 12),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                                  children: [
+                                    _bottomIconTile(
+                                      icon: Icons.star_border,
+                                      label: "Points",
+                                      value: "0",
+                                      color: Colors.amberAccent,
+                                    ),
+                                    _bottomIconTile(
+                                      icon: Icons.favorite_border,
+                                      label: "Pulsation",
+                                      value: "0",
+                                      color: Colors.pinkAccent,
+                                    ),
+                                    _bottomIconTile(
+                                      icon: Icons.pending_outlined,
+                                      label: "Pending",
+                                      value: "0",
+                                      color: Colors.blueAccent,
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              const SizedBox(height: 16),
+
+                              if (FirebaseAuth.instance.currentUser?.uid == _adminUid) ...[
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const AdminAgencyReviewScreen()),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.greenAccent),
+                                    label: const Text(
+                                      "Admin: Review Agencies",
+                                      style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.greenAccent.withOpacity(0.10),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      side: const BorderSide(color: Colors.greenAccent),
+                                      elevation: 0,
+                                      shadowColor: Colors.greenAccent.withOpacity(0.3),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const GiftCatalogAdminScreen()),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.card_giftcard, color: Colors.greenAccent),
+                                    label: const Text(
+                                      "Admin: Gift Catalog",
+                                      style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.greenAccent.withOpacity(0.10),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      side: const BorderSide(color: Colors.greenAccent),
+                                      elevation: 0,
+                                      shadowColor: Colors.greenAccent.withOpacity(0.3),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(builder: (context) => const AdminCoinTopupScreen()),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.monetization_on_outlined, color: Colors.greenAccent),
+                                    label: const Text(
+                                      "Admin: Coin Top-Up",
+                                      style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.greenAccent.withOpacity(0.10),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      side: const BorderSide(color: Colors.greenAccent),
+                                      elevation: 0,
+                                      shadowColor: Colors.greenAccent.withOpacity(0.3),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => const VipAdminScreen(),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(
+                                      Icons.workspace_premium,
+                                      color: Colors.greenAccent,
+                                    ),
+                                    label: const Text(
+                                      "Admin: VIP Management",
+                                      style: TextStyle(
+                                        color: Colors.greenAccent,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.greenAccent.withOpacity(0.10),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      side: const BorderSide(
+                                        color: Colors.greenAccent,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => const LevelRulesScreen(),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(
+                                      Icons.settings_applications,
+                                      color: Colors.greenAccent,
+                                    ),
+                                    label: const Text(
+                                      "Admin: Level Rules",
+                                      style: TextStyle(
+                                        color: Colors.greenAccent,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.greenAccent.withOpacity(0.10),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      side: const BorderSide(color: Colors.greenAccent),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                              ],
+                            ] else ...[
+                              _buildMomentTab(uid),
                             ],
-                          ),
-                          const Divider(color: Colors.white12, height: 24),
-                          
-                          if (selectedTab == 0) ...[
+                          ] else ...[
+                            const SizedBox(height: 8),
+                            
                             Row(
                               children: [
                                 Expanded(
-                                  child: _walletStatCard(
-                                    icon: Icons.monetization_on,
-                                    label: "Coins",
-                                    value: coins,
-                                    color: Colors.amberAccent,
+                                  child: _actionButton(
+                                    icon: Icons.chat_bubble_outline,
+                                    label: "Message",
+                                    color: Colors.blueAccent,
+                                    onTap: _openChat,
                                   ),
                                 ),
                                 const SizedBox(width: 10),
-                                // 🔥 Earned Coins - Display with auto update
+                                
                                 Expanded(
-                                  child: _walletStatCard(
-                                    icon: Icons.monetization_on_outlined,
-                                    label: "Earned Coins",
-                                    value: earnedCoins,
-                                    color: Colors.greenAccent,
-                                  ),
+                                  child: _isFollowLoading
+                                      ? Container(
+                                          height: 50,
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withOpacity(0.05),
+                                            borderRadius: BorderRadius.circular(12),
+                                          ),
+                                          child: const Center(
+                                            child: SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                color: Colors.amberAccent,
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                      : _actionButton(
+                                          icon: _isFollowing ? Icons.check : Icons.person_add,
+                                          label: _isFollowing ? "Following" : "Follow",
+                                          color: _isFollowing ? Colors.grey : Colors.amberAccent,
+                                          onTap: _toggleFollow,
+                                        ),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 14),
-
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: () {
-                                  if (ownedAgencyId != null) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (context) => const AgencyOwnerDashboard()),
-                                    );
-                                  } else if (agencyId != null) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (context) => const HostCenterScreen()),
-                                    );
-                                  } else {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (context) => const BecomeHostScreen()),
-                                    );
-                                  }
-                                },
-                                icon: Icon(
-                                  ownedAgencyId != null
-                                      ? Icons.dashboard_customize
-                                      : (agencyId != null ? Icons.mic_external_on : Icons.workspace_premium),
-                                  color: Colors.amberAccent,
+                            
+                            const SizedBox(height: 20),
+                            
+                            Center(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.05),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.white.withOpacity(0.1)),
                                 ),
-                                label: Text(
-                                  ownedAgencyId != null
-                                      ? "Agency Dashboard"
-                                      : (agencyId != null ? "Host Center" : "Become a Host"),
-                                  style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  backgroundColor: Colors.amberAccent.withOpacity(0.10),
-                                  padding: const EdgeInsets.symmetric(vertical: 14),
-                                  side: const BorderSide(color: Colors.amberAccent),
-                                  elevation: 0,
-                                  shadowColor: Colors.amberAccent.withOpacity(0.3),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
+                                child: Text(
+                                  "Viewing @$name's profile",
+                                  style: const TextStyle(color: Colors.white38, fontSize: 13),
                                 ),
                               ),
                             ),
+                            
                             const SizedBox(height: 16),
-
-                            _buildPremiumGrid(),
-
-                            const SizedBox(height: 16),
-
-                            Container(
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: [Colors.white.withOpacity(0.07), Colors.white.withOpacity(0.03)],
-                                ),
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(color: Colors.white.withOpacity(0.08)),
-                                boxShadow: [
-                                  BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 12, offset: const Offset(0, 6)),
-                                ],
-                              ),
-                              child: Column(
-                                children: [
-                                  _menuListTile(
-                                    icon: Icons.meeting_room_outlined,
-                                    label: "My Room",
-                                    onTap: _openMyRoom,
-                                  ),
-                                  const Divider(color: Colors.white12, height: 1, indent: 56),
-                                  _menuListTile(
-                                    icon: Icons.badge_outlined,
-                                    label: "My PK-Live Card",
-                                    onTap: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const PkLiveCardScreen()),
-                                      );
-                                    },
-                                  ),
-                                  const Divider(color: Colors.white12, height: 1, indent: 56),
-                                  _menuListTile(
-                                    icon: Icons.settings_outlined,
-                                    label: "Setting",
-                                    onTap: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const SettingsScreen()),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 24),
-
-                            if (user?.uid == _adminUid) ...[
-                              // Admin: Review Agencies
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (context) => const AdminAgencyReviewScreen()),
-                                    );
-                                  },
-                                  icon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.greenAccent),
-                                  label: const Text(
-                                    "Admin: Review Agencies",
-                                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    backgroundColor: Colors.greenAccent.withOpacity(0.10),
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    side: const BorderSide(color: Colors.greenAccent),
-                                    elevation: 0,
-                                    shadowColor: Colors.greenAccent.withOpacity(0.3),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              // Admin: Gift Catalog
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (context) => const GiftCatalogAdminScreen()),
-                                    );
-                                  },
-                                  icon: const Icon(Icons.card_giftcard, color: Colors.greenAccent),
-                                  label: const Text(
-                                    "Admin: Gift Catalog",
-                                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    backgroundColor: Colors.greenAccent.withOpacity(0.10),
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    side: const BorderSide(color: Colors.greenAccent),
-                                    elevation: 0,
-                                    shadowColor: Colors.greenAccent.withOpacity(0.3),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              // Admin: Coin Top-Up
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (context) => const AdminCoinTopupScreen()),
-                                    );
-                                  },
-                                  icon: const Icon(Icons.monetization_on_outlined, color: Colors.greenAccent),
-                                  label: const Text(
-                                    "Admin: Coin Top-Up",
-                                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    backgroundColor: Colors.greenAccent.withOpacity(0.10),
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    side: const BorderSide(color: Colors.greenAccent),
-                                    elevation: 0,
-                                    shadowColor: Colors.greenAccent.withOpacity(0.3),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              // Admin: VIP Management
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => const VipAdminScreen(),
-                                      ),
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.workspace_premium,
-                                    color: Colors.greenAccent,
-                                  ),
-                                  label: const Text(
-                                    "Admin: VIP Management",
-                                    style: TextStyle(
-                                      color: Colors.greenAccent,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    backgroundColor: Colors.greenAccent.withOpacity(0.10),
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    side: const BorderSide(
-                                      color: Colors.greenAccent,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              // Admin: Level Rules
-                              SizedBox(
-                                width: double.infinity,
-                                child: OutlinedButton.icon(
-                                  onPressed: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => const LevelRulesScreen(),
-                                      ),
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.settings_applications,
-                                    color: Colors.greenAccent,
-                                  ),
-                                  label: const Text(
-                                    "Admin: Level Rules",
-                                    style: TextStyle(
-                                      color: Colors.greenAccent,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  style: OutlinedButton.styleFrom(
-                                    backgroundColor: Colors.greenAccent.withOpacity(0.10),
-                                    padding: const EdgeInsets.symmetric(vertical: 14),
-                                    side: const BorderSide(color: Colors.greenAccent),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                            ],
-                          ] else ...[
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 40),
-                              child: Center(
-                                child: Text("No moments yet", style: TextStyle(color: Colors.white38)),
-                              ),
-                            ),
+                            _buildMomentTab(uid),
+                            const SizedBox(height: 30),
                           ],
                           const SizedBox(height: 30),
                         ],
@@ -907,7 +1236,235 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // 🔥 PREMIUM FEATURES GRID
+  // ========== MOMENT TAB ==========
+  Widget _buildMomentTab(String uid) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+          child: Row(
+            children: [
+              const Text(
+                "Moments",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(width: 8),
+              StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('plaza_posts')
+                    .where('userId', isEqualTo: uid)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Text(
+                        '0',
+                        style: TextStyle(
+                          color: Colors.white54,
+                          fontSize: 12,
+                        ),
+                      ),
+                    );
+                  }
+                  final count = snapshot.data!.docs.length;
+                  return Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '$count',
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const Spacer(),
+              if (_isOwnProfile)
+                GestureDetector(
+                  onTap: _navigateToCreatePost,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFFF6B6B), Color(0xFFFF3366)],
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.pinkAccent.withOpacity(0.3),
+                          blurRadius: 8,
+                        ),
+                      ],
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.add,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Create',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 4),
+
+        StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance
+              .collection('plaza_posts')
+              .where('userId', isEqualTo: uid)
+              .orderBy('createdAt', descending: true)
+              .snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Text(
+                    "Error: ${snapshot.error}",
+                    style: const TextStyle(color: Colors.white54),
+                  ),
+                ),
+              );
+            }
+
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: CircularProgressIndicator(
+                    color: Colors.amberAccent,
+                  ),
+                ),
+              );
+            }
+
+            if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(40),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.post_add_outlined,
+                        color: Colors.white24,
+                        size: 48,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _isOwnProfile ? "No moments yet" : "No moments yet",
+                        style: const TextStyle(color: Colors.white38),
+                      ),
+                      if (_isOwnProfile)
+                        Text(
+                          "Tap 'Create' to share your moment!",
+                          style: const TextStyle(color: Colors.white24),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            final posts = snapshot.data!.docs;
+            return ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: posts.length,
+              itemBuilder: (context, index) {
+                return PostCard(doc: posts[index]);
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  // ========== WIDGETS ==========
+  
+  Widget _actionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 50,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              color.withOpacity(0.20),
+              color.withOpacity(0.05),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: color.withOpacity(0.4),
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildPremiumGrid() {
     return Container(
       margin: const EdgeInsets.only(top: 4),
@@ -1106,16 +1663,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _socialCount(String value, String label) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(color: Colors.white38, fontSize: 10.5)),
-        ],
+  Widget _socialCountClickable(String value, String label, FollowListType type) {
+    return GestureDetector(
+      onTap: () => _navigateToFollowList(type),
+      child: Padding(
+        padding: const EdgeInsets.only(right: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              value,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white38,
+                fontSize: 10.5,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1143,6 +1716,52 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Icon(icon, size: 13, color: color),
           const SizedBox(width: 4),
           Text(value, style: TextStyle(color: color, fontSize: 11.5, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget _bottomIconTile({
+    required IconData icon,
+    required String label,
+    required String value,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: color.withOpacity(0.2),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1193,8 +1812,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _tabButton(String label, int index) {
+  Widget _tabButton(String label, int index, {String? count}) {
     final isSelected = selectedTab == index;
+    final displayLabel = count != null ? "$label ($count)" : label;
+    
     return GestureDetector(
       onTap: () => setState(() => selectedTab = index),
       child: Column(
@@ -1202,7 +1823,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            label,
+            displayLabel,
             style: TextStyle(
               color: isSelected ? Colors.white : Colors.white38,
               fontSize: 16,

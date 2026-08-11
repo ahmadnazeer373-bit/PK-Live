@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'send_gift_sheet.dart';
 import 'message_inbox_screen.dart';
 import '../vip_utils.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'gift_popup_overlay.dart';
 
 // TODO: Replace with your own Agora App ID from console.agora.io

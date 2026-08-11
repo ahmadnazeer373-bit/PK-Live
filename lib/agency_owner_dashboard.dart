@@ -71,6 +71,15 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
     }
   }
 
+  // 🔥 Calculate days since creation
+  String _getDaysSince(Timestamp? createdAt) {
+    if (createdAt == null) return '0 days';
+    final created = createdAt.toDate();
+    final now = DateTime.now();
+    final difference = now.difference(created);
+    return '${difference.inDays} days';
+  }
+
   @override
   Widget build(BuildContext context) {
     final uid = user?.uid;
@@ -124,13 +133,18 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
                     ),
                     const SizedBox(height: 16),
 
-                    // ---------- Agency Card ----------
+                    // ---------- Agency Card (Updated) ----------
                     StreamBuilder<DocumentSnapshot>(
                       stream: FirebaseFirestore.instance.collection('agencies').doc(ownedAgencyId).snapshots(),
                       builder: (context, agencySnap) {
                         final agencyData = agencySnap.data?.data() as Map<String, dynamic>?;
                         final agencyName = agencyData?['agencyName'] as String? ?? '';
                         final inviteCode = agencyData?['inviteCode'] as String? ?? ownedAgencyId;
+                        final createdAt = agencyData?['createdAt'] as Timestamp?;
+                        final ownerUid = agencyData?['ownerUid'] as String?;
+
+                        // 🔥 Get days since creation
+                        final daysSince = _getDaysSince(createdAt);
 
                         return Container(
                           width: double.infinity,
@@ -147,6 +161,7 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                              // 🔥 Agency Header - Name & ID
                               Row(
                                 children: [
                                   Container(
@@ -177,14 +192,78 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
                                   ),
                                 ],
                               ),
+                              const SizedBox(height: 12),
+
+                              // 🔥 Agency Info Row - Created & Manager
+                              Row(
+                                children: [
+                                  _infoChip(
+                                    icon: Icons.calendar_today,
+                                    label: "Created $daysSince",
+                                    color: Colors.blueAccent,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  _infoChip(
+                                    icon: Icons.person,
+                                    label: "Agency Manager",
+                                    color: Colors.amberAccent,
+                                  ),
+                                ],
+                              ),
                               const SizedBox(height: 16),
+
+                              // 🔥 Hosts Count with "See All"
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  StreamBuilder<QuerySnapshot>(
+                                    stream: FirebaseFirestore.instance
+                                        .collection('users')
+                                        .where('agencyId', isEqualTo: ownedAgencyId)
+                                        .snapshots(),
+                                    builder: (context, hostsSnap) {
+                                      final totalHosts = hostsSnap.data?.docs.length ?? 0;
+                                      return Row(
+                                        children: [
+                                          const Icon(Icons.groups, color: Colors.white54, size: 18),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            "Hosts ($totalHosts)",
+                                            style: const TextStyle(color: Colors.white, fontSize: 14),
+                                          ),
+                                        ],
+                                      );
+                                    },
+                                  ),
+                                  GestureDetector(
+                                    onTap: () {
+                                      // 🔥 Show all hosts list
+                                      _showHostsList(context, ownedAgencyId);
+                                    },
+                                    child: Text(
+                                      "See all",
+                                      style: TextStyle(
+                                        color: Colors.amberAccent.withOpacity(0.9),
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 16),
+
+                              // 🔥 Action Buttons - Contact Agency & Invite Host
                               Row(
                                 children: [
                                   Expanded(
                                     child: OutlinedButton.icon(
-                                      onPressed: () => _editAgencyName(ownedAgencyId, agencyName),
-                                      icon: const Icon(Icons.edit_outlined, color: Colors.white70, size: 16),
-                                      label: const Text("Edit Profile", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                      onPressed: () {
+                                        // 🔥 Contact Agency - Show contact info
+                                        _showContactAgency(context, agencyName, ownerUid);
+                                      },
+                                      icon: const Icon(Icons.contact_mail, color: Colors.white70, size: 16),
+                                      label: const Text("Contact Agency", style: TextStyle(color: Colors.white70, fontSize: 12)),
                                       style: OutlinedButton.styleFrom(
                                         side: BorderSide(color: Colors.white.withOpacity(0.2)),
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -195,12 +274,13 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
                                   Expanded(
                                     child: OutlinedButton.icon(
                                       onPressed: () {
+                                        Clipboard.setData(ClipboardData(text: inviteCode));
                                         ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(content: Text("Set Rooms \u2014 coming soon")),
+                                          const SnackBar(content: Text("Invite code copied! Share it with hosts.")),
                                         );
                                       },
-                                      icon: const Icon(Icons.meeting_room_outlined, color: Colors.white70, size: 16),
-                                      label: const Text("Set Rooms", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                      icon: const Icon(Icons.person_add_alt, color: Colors.white70, size: 16),
+                                      label: const Text("Invite Host", style: TextStyle(color: Colors.white70, fontSize: 12)),
                                       style: OutlinedButton.styleFrom(
                                         side: BorderSide(color: Colors.white.withOpacity(0.2)),
                                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -210,6 +290,8 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
                                 ],
                               ),
                               const SizedBox(height: 16),
+
+                              // 🔥 Invite Code
                               const Text("Invite Code", style: TextStyle(color: Colors.white54, fontSize: 12)),
                               const SizedBox(height: 6),
                               Row(
@@ -266,9 +348,6 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
                         final monthStart = DateTime(now.year, now.month, 1);
 
                         return StreamBuilder<QuerySnapshot>(
-                          // Note: Firestore 'whereIn' supports up to 30 values — fine for
-                          // small/medium agencies. For larger agencies this query will
-                          // need pagination or a server-side aggregation later.
                           stream: hostUids.isEmpty
                               ? const Stream.empty()
                               : FirebaseFirestore.instance
@@ -433,8 +512,6 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
                         Expanded(
                           child: ElevatedButton.icon(
                             onPressed: () {
-                              // Reuses the invite code shown above; the copy button
-                              // there is the actual "invite" action for now.
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(content: Text("Copy the invite code above and send it to hosts")),
                               );
@@ -570,6 +647,137 @@ class _AgencyOwnerDashboardState extends State<AgencyOwnerDashboard> {
             },
           ),
         ),
+      ),
+    );
+  }
+
+  // 🔥 Show Hosts List Dialog
+  void _showHostsList(BuildContext context, String agencyId) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1930),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          "Hosts List",
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Container(
+          width: double.maxFinite,
+          height: 300,
+          child: StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance
+                .collection('users')
+                .where('agencyId', isEqualTo: agencyId)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator(color: Colors.amberAccent));
+              }
+              final docs = snapshot.data!.docs;
+              if (docs.isEmpty) {
+                return const Center(
+                  child: Text("No hosts in this agency", style: TextStyle(color: Colors.white38)),
+                );
+              }
+              return ListView.builder(
+                itemCount: docs.length,
+                itemBuilder: (context, index) {
+                  final data = docs[index].data() as Map<String, dynamic>;
+                  final name = data['name'] ?? 'Unknown';
+                  final avatar = data['avatar'] ?? '🧑';
+                  return ListTile(
+                    leading: Text(avatar, style: const TextStyle(fontSize: 24)),
+                    title: Text(name, style: const TextStyle(color: Colors.white)),
+                    subtitle: Text(
+                      "ID: ${data['userID'] ?? 'N/A'}",
+                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close", style: TextStyle(color: Colors.amberAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🔥 Show Contact Agency Dialog
+  void _showContactAgency(BuildContext context, String agencyName, String? ownerUid) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1B1930),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          "Contact Agency",
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              "Agency: $agencyName",
+              style: const TextStyle(color: Colors.white, fontSize: 16),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              "Contact options will be available here.",
+              style: TextStyle(color: Colors.white54, fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              "Email: support@pklive.com\nPhone: +92 300 1234567",
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Close", style: TextStyle(color: Colors.amberAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// 🔥 Info Chip Widget
+class _infoChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  const _infoChip({required this.icon, required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w500),
+          ),
+        ],
       ),
     );
   }
