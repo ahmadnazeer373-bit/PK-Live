@@ -392,7 +392,6 @@ class _FollowableAvatarState extends State<_FollowableAvatar> {
     if (currentUid == null || widget.authorId.isEmpty || currentUid == widget.authorId) return;
 
     try {
-      // 🔥 SIRF following SUBCOLLECTION CHECK KAREIN
       final doc = await FirebaseFirestore.instance
           .collection('users')
           .doc(currentUid)
@@ -410,6 +409,33 @@ class _FollowableAvatarState extends State<_FollowableAvatar> {
     }
   }
 
+  // 🔔 Writes a notification doc into the target user's notifications feed.
+  Future<void> _sendNotification({
+    required String toUid,
+    required String fromUid,
+    required String type,
+    required String title,
+    required String body,
+  }) async {
+    if (toUid == fromUid) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('notifications')
+          .doc(toUid)
+          .collection('items')
+          .add({
+        'type': type,
+        'senderId': fromUid,
+        'title': title,
+        'body': body,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      });
+    } catch (e) {
+      debugPrint("Notification send failed: $e");
+    }
+  }
+
   Future<void> _toggleFollow() async {
     final currentUid = FirebaseAuth.instance.currentUser?.uid;
     if (currentUid == null || widget.authorId.isEmpty || _isLoading) return;
@@ -420,19 +446,46 @@ class _FollowableAvatarState extends State<_FollowableAvatar> {
     try {
       final currentUserRef = FirebaseFirestore.instance.collection('users').doc(currentUid);
       final targetUserRef = FirebaseFirestore.instance.collection('users').doc(widget.authorId);
-      
-      // 🔥 SIRF following SUBCOLLECTION USE KAREIN
       final followRef = currentUserRef.collection('following').doc(widget.authorId);
 
       if (_isFollowing) {
         // 🔥 UNFOLLOW
         await followRef.delete();
-        await currentUserRef.update({
-          'followingCount': FieldValue.increment(-1),
-        });
-        await targetUserRef.update({
-          'followersCount': FieldValue.increment(-1),
-        });
+
+        final theyFollowMe = await targetUserRef.collection('following').doc(currentUid).get();
+
+        // 🔔 Clear any pending Friend Request entry for this pair in either
+        // direction — it no longer applies once the relationship changes.
+        await targetUserRef.collection('followers').doc(currentUid).delete();
+        await currentUserRef.collection('followers').doc(widget.authorId).delete();
+
+        if (theyFollowMe.exists) {
+          await currentUserRef.collection('friends').doc(widget.authorId).delete();
+          await targetUserRef.collection('friends').doc(currentUid).delete();
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(-1),
+            'friendsCount': FieldValue.increment(-1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(-1),
+            'friendsCount': FieldValue.increment(-1),
+          });
+
+          // 🔔 They still follow me — one-directional now, so it goes back
+          // into my own pending Friend Request list.
+          await currentUserRef.collection('followers').doc(widget.authorId).set({
+            'followerId': widget.authorId,
+            'followedAt': FieldValue.serverTimestamp(),
+          });
+        } else {
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(-1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(-1),
+          });
+        }
 
         if (mounted) {
           setState(() => _isFollowing = false);
@@ -441,18 +494,59 @@ class _FollowableAvatarState extends State<_FollowableAvatar> {
           );
         }
       } else {
-        // 🔥 FOLLOW - Sirf following subcollection mein add
+        // 🔥 FOLLOW
         await followRef.set({
           'followedAt': FieldValue.serverTimestamp(),
           'targetUserId': widget.authorId,
         });
 
-        await currentUserRef.update({
-          'followingCount': FieldValue.increment(1),
-        });
-        await targetUserRef.update({
-          'followersCount': FieldValue.increment(1),
-        });
+        final theyFollowMe = await targetUserRef.collection('following').doc(currentUid).get();
+
+        if (theyFollowMe.exists) {
+          // 🔔 Mutual now — resolve the pending request they left in my own
+          // Friend Request list, and become friends.
+          await currentUserRef.collection('followers').doc(widget.authorId).delete();
+
+          await currentUserRef.collection('friends').doc(widget.authorId).set({
+            'friendId': widget.authorId,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+          await targetUserRef.collection('friends').doc(currentUid).set({
+            'friendId': currentUid,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(1),
+            'friendsCount': FieldValue.increment(1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(1),
+            'friendsCount': FieldValue.increment(1),
+          });
+        } else {
+          // 🔔 One-directional follow — show up as a pending Friend Request
+          // for the target, and notify them.
+          await targetUserRef.collection('followers').doc(currentUid).set({
+            'followerId': currentUid,
+            'followedAt': FieldValue.serverTimestamp(),
+          });
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(1),
+          });
+
+          await _sendNotification(
+            toUid: widget.authorId,
+            fromUid: currentUid,
+            type: 'follow',
+            title: 'New Follower',
+            body: 'started following you',
+          );
+        }
 
         if (mounted) {
           setState(() => _isFollowing = true);
@@ -471,7 +565,6 @@ class _FollowableAvatarState extends State<_FollowableAvatar> {
       if (mounted) setState(() => _isLoading = false);
     }
   }
-
   void _openProfile() {
     if (widget.authorId.isEmpty) return;
     Navigator.push(

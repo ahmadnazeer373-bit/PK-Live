@@ -135,6 +135,12 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
           'commentsCount': 0,
           'createdAt': FieldValue.serverTimestamp(),
         });
+
+        // 🔔 Notify friends that a new moment was posted.
+        await _notifyFriendsOfNewPost(
+          user.uid,
+          (userData['name'] ?? user.displayName ?? 'User').toString(),
+        );
       }
 
       if (mounted) Navigator.pop(context);
@@ -146,6 +152,41 @@ class _CreatePostScreenState extends State<CreatePostScreen> {
       }
     } finally {
       if (mounted) setState(() => _posting = false);
+    }
+  }
+
+  // 🔔 Notify every mutual friend that this user just shared a new moment.
+  // Only friends get pinged (not every follower) — keeps it relevant.
+  // Failures here never block the post itself; they're just logged.
+  Future<void> _notifyFriendsOfNewPost(String uid, String userName) async {
+    try {
+      final friendsSnap = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .collection('friends')
+          .get();
+
+      if (friendsSnap.docs.isEmpty) return;
+
+      final batch = FirebaseFirestore.instance.batch();
+      for (final friendDoc in friendsSnap.docs) {
+        final notifRef = FirebaseFirestore.instance
+            .collection('notifications')
+            .doc(friendDoc.id)
+            .collection('items')
+            .doc();
+        batch.set(notifRef, {
+          'type': 'moment',
+          'senderId': uid,
+          'title': 'New Moment',
+          'body': '$userName shared a new moment',
+          'timestamp': FieldValue.serverTimestamp(),
+          'read': false,
+        });
+      }
+      await batch.commit();
+    } catch (e) {
+      debugPrint("Failed to notify friends of new post: $e");
     }
   }
 

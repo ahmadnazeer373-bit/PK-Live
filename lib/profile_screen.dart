@@ -24,6 +24,9 @@ import 'screen/chat_screen.dart';
 import 'Screen/create_post_screen.dart';
 import 'widgets/post_card.dart';
 import 'follow_list_screen.dart';
+import 'screen/admin_fix_screen.dart';
+import 'recalculate_counts_screen.dart';
+import 'relationship_page.dart';
 
 const String _adminUid = "1dd7eMMAm9dp6QqOzQsr5eJXPjB2";
 
@@ -43,6 +46,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   List<Map<String, dynamic>> _levelRules = [];
   
   bool _isFollowing = false;
+  bool _theyFollowMe = false;
   bool _isFollowLoading = false;
 
   String get _userIdToShow {
@@ -63,6 +67,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void initState() {
     super.initState();
     _loadLevelRules();
+    
+    if (!_isOwnProfile && _userIdToShow.isNotEmpty) {
+      _addVisitor(_userIdToShow);
+    }
+    
     if (!_isOwnProfile) {
       _checkFollowStatus();
     }
@@ -73,6 +82,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
     super.dispose();
   }
 
+  Future<void> _addVisitor(String targetUid) async {
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null || currentUid == targetUid) return;
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('users')
+          .doc(targetUid)
+          .collection('visitors')
+          .doc(currentUid)
+          .set({
+        'visitorId': currentUid,
+        'visitedAt': FieldValue.serverTimestamp(),
+        'read': false,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print("Error adding visitor: $e");
+    }
+  }
+
+  // ========== CHECK RELATIONSHIP ==========
+  Future<Map<String, dynamic>?> _checkRelationshipWithUser(String targetUid) async {
+    try {
+      final currentUid = FirebaseAuth.instance.currentUser?.uid;
+      if (currentUid == null || targetUid.isEmpty) return null;
+      
+      // Agar apni profile hai to relationship nahi dikhana
+      if (currentUid == targetUid) return null;
+
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUid)
+          .collection('relationships')
+          .where('friendId', isEqualTo: targetUid)
+          .limit(1)
+          .get();
+
+      if (snapshot.docs.isNotEmpty) {
+        final data = snapshot.docs.first.data();
+        // Check expiry
+        final expiryDate = (data['expiryDate'] as Timestamp?)?.toDate();
+        if (expiryDate != null && DateTime.now().isAfter(expiryDate)) {
+          return null; // Expired
+        }
+        return data;
+      }
+      return null;
+    } catch (e) {
+      print('Error checking relationship: $e');
+      return null;
+    }
+  }
+
   Future<void> _loadLevelRules() async {
     try {
       final sendingRules = await LevelService.instance.getLevelRules(type: 'sending');
@@ -81,7 +143,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _levelRules = [...sendingRules, ...receivingRules];
       });
     } catch (e) {
-      print("❌ Error loading level rules: $e");
+      print("Error loading level rules: $e");
     }
   }
 
@@ -107,7 +169,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() {});
   }
 
-  // 🔥 FIXED: Sirf following subcollection check karein
   Future<void> _checkFollowStatus() async {
     final currentUid = FirebaseAuth.instance.currentUser?.uid;
     if (currentUid == null || _userIdToShow.isEmpty) return;
@@ -120,9 +181,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
           .doc(_userIdToShow)
           .get();
 
+      final theirDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(_userIdToShow)
+          .collection('following')
+          .doc(currentUid)
+          .get();
+
       if (mounted) {
         setState(() {
           _isFollowing = doc.exists;
+          _theyFollowMe = theirDoc.exists;
         });
       }
     } catch (e) {
@@ -130,7 +199,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // 🔥 FIXED: Sirf following subcollection use karein
+  Future<void> _sendNotification({
+    required String toUid,
+    required String fromUid,
+    required String type,
+    required String title,
+    required String body,
+  }) async {
+    if (toUid == fromUid) return;
+    try {
+      await FirebaseFirestore.instance
+          .collection('notifications')
+          .doc(toUid)
+          .collection('items')
+          .add({
+        'type': type,
+        'senderId': fromUid,
+        'title': title,
+        'body': body,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      });
+    } catch (e) {
+      debugPrint('Notification send failed: $e');
+    }
+  }
+
   Future<void> _toggleFollow() async {
     final currentUid = FirebaseAuth.instance.currentUser?.uid;
     if (currentUid == null || _userIdToShow.isEmpty || _isFollowLoading) return;
@@ -140,49 +234,113 @@ class _ProfileScreenState extends State<ProfileScreen> {
     try {
       final currentUserRef = FirebaseFirestore.instance.collection('users').doc(currentUid);
       final targetUserRef = FirebaseFirestore.instance.collection('users').doc(_userIdToShow);
-      
-      // 🔥 SIRF following SUBCOLLECTION USE KAREIN
       final followRef = currentUserRef.collection('following').doc(_userIdToShow);
 
       if (_isFollowing) {
-        // 🔥 UNFOLLOW
         await followRef.delete();
-        
-        await currentUserRef.update({
-          'followingCount': FieldValue.increment(-1),
-        });
-        await targetUserRef.update({
-          'followersCount': FieldValue.increment(-1),
-        });
+
+        final theyFollowMe = await targetUserRef.collection('following').doc(currentUid).get();
+
+        await targetUserRef.collection('followers').doc(currentUid).delete();
+        await currentUserRef.collection('followers').doc(_userIdToShow).delete();
+
+        if (theyFollowMe.exists) {
+          await currentUserRef.collection('friends').doc(_userIdToShow).delete();
+          await targetUserRef.collection('friends').doc(currentUid).delete();
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(-1),
+            'friendsCount': FieldValue.increment(-1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(-1),
+            'friendsCount': FieldValue.increment(-1),
+          });
+
+          await currentUserRef.collection('followers').doc(_userIdToShow).set({
+            'followerId': _userIdToShow,
+            'followedAt': FieldValue.serverTimestamp(),
+          });
+        } else {
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(-1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(-1),
+          });
+        }
 
         if (mounted) {
-          setState(() => _isFollowing = false);
+          setState(() {
+            _isFollowing = false;
+            _theyFollowMe = theyFollowMe.exists;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Unfollowed")),
           );
         }
       } else {
-        // 🔥 FOLLOW - Sirf following subcollection mein add
         await followRef.set({
           'followedAt': FieldValue.serverTimestamp(),
           'targetUserId': _userIdToShow,
         });
 
-        await currentUserRef.update({
-          'followingCount': FieldValue.increment(1),
-        });
-        await targetUserRef.update({
-          'followersCount': FieldValue.increment(1),
-        });
+        final theyFollowMe = await targetUserRef.collection('following').doc(currentUid).get();
+
+        if (theyFollowMe.exists) {
+          await currentUserRef.collection('followers').doc(_userIdToShow).delete();
+
+          await currentUserRef.collection('friends').doc(_userIdToShow).set({
+            'friendId': _userIdToShow,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+          await targetUserRef.collection('friends').doc(currentUid).set({
+            'friendId': currentUid,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(1),
+            'friendsCount': FieldValue.increment(1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(1),
+            'friendsCount': FieldValue.increment(1),
+          });
+        } else {
+          await targetUserRef.collection('followers').doc(currentUid).set({
+            'followerId': currentUid,
+            'followedAt': FieldValue.serverTimestamp(),
+          });
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(1),
+          });
+
+          await _sendNotification(
+            toUid: _userIdToShow,
+            fromUid: currentUid,
+            type: 'follow',
+            title: 'New Follower',
+            body: 'started following you',
+          );
+        }
 
         if (mounted) {
-          setState(() => _isFollowing = true);
+          setState(() {
+            _isFollowing = true;
+            _theyFollowMe = theyFollowMe.exists;
+          });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("Followed!")),
           );
         }
       }
     } catch (e) {
+      debugPrint('DEBUG _toggleFollow ERROR: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Error: $e")),
@@ -459,6 +617,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _navigateToFollowList(FollowListType type) {
+    if (!_isOwnProfile) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("This list is private")),
+      );
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -466,6 +630,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
           userId: _userIdToShow,
           listType: type,
         ),
+      ),
+    );
+  }
+
+  void _openRelationshipPage() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => RelationshipPage(),
       ),
     );
   }
@@ -679,39 +852,109 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               },
                             ),
                           ),
+                        // ========== AVATAR WITH RELATIONSHIP FRAME ==========
                         Positioned(
                           bottom: -45,
                           left: 20,
-                          child: Container(
-                            padding: const EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: const LinearGradient(
-                                colors: [Color(0xFFFFE082), Color(0xFFFFA000)],
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.amber.withOpacity(0.35),
-                                  blurRadius: 16,
-                                  spreadRadius: 1,
+                          child: FutureBuilder<Map<String, dynamic>?>(
+                            future: _checkRelationshipWithUser(_userIdToShow),
+                            builder: (context, relationshipSnapshot) {
+                              final relationshipData = relationshipSnapshot.data;
+                              final hasRelationship = relationshipData != null;
+                              Color? frameColor;
+                              String relationshipEmoji = '💕';
+                              String relationshipLabel = '';
+                              
+                              if (hasRelationship) {
+                                final colorHex = relationshipData['frameColor'] ?? '#FF6B6B';
+                                frameColor = Color(int.parse(colorHex.replaceAll('#', '0xFF')));
+                                relationshipEmoji = relationshipData['relationshipEmoji'] ?? '💕';
+                                relationshipLabel = relationshipData['relationshipLabel'] ?? '';
+                              }
+
+                              return Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  gradient: hasRelationship && frameColor != null
+                                      ? LinearGradient(
+                                          colors: [
+                                            frameColor.withOpacity(0.8),
+                                            frameColor.withOpacity(0.3),
+                                          ],
+                                        )
+                                      : const LinearGradient(
+                                          colors: [Color(0xFFFFE082), Color(0xFFFFA000)],
+                                        ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: hasRelationship && frameColor != null
+                                          ? frameColor.withOpacity(0.5)
+                                          : Colors.amber.withOpacity(0.35),
+                                      blurRadius: 20,
+                                      spreadRadius: 4,
+                                    ),
+                                  ],
                                 ),
-                              ],
-                            ),
-                            child: Container(
-                              padding: const EdgeInsets.all(2),
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Color(0xFF0E0C18),
-                              ),
-                              child: CircleAvatar(
-                                radius: 42,
-                                backgroundColor: Colors.white10,
-                                backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
-                                child: avatarUrl == null
-                                    ? Text(avatar, style: const TextStyle(fontSize: 40))
-                                    : null,
-                              ),
-                            ),
+                                child: Container(
+                                  padding: const EdgeInsets.all(2),
+                                  decoration: const BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Color(0xFF0E0C18),
+                                  ),
+                                  child: Stack(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 42,
+                                        backgroundColor: Colors.white10,
+                                        backgroundImage: avatarUrl != null ? NetworkImage(avatarUrl) : null,
+                                        child: avatarUrl == null
+                                            ? Text(avatar, style: const TextStyle(fontSize: 40))
+                                            : null,
+                                      ),
+                                      // Relationship Badge on Avatar
+                                      if (hasRelationship && frameColor != null)
+                                        Positioned(
+                                          bottom: 0,
+                                          right: 0,
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 3,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black.withOpacity(0.85),
+                                              borderRadius: BorderRadius.circular(12),
+                                              border: Border.all(
+                                                color: frameColor,
+                                                width: 1.5,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  relationshipEmoji,
+                                                  style: const TextStyle(fontSize: 12),
+                                                ),
+                                                const SizedBox(width: 2),
+                                                Text(
+                                                  relationshipLabel,
+                                                  style: TextStyle(
+                                                    color: frameColor,
+                                                    fontSize: 8,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                         ),
                       ],
@@ -723,17 +966,68 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            name,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 23,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.2,
-                              shadows: [
-                                Shadow(color: Colors.black45, blurRadius: 6, offset: Offset(0, 2)),
-                              ],
-                            ),
+                          // ========== NAME WITH RELATIONSHIP LABEL ==========
+                          Row(
+                            children: [
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 23,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.2,
+                                  shadows: [
+                                    Shadow(color: Colors.black45, blurRadius: 6, offset: Offset(0, 2)),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              // Relationship Label Badge
+                              FutureBuilder<Map<String, dynamic>?>(
+                                future: _checkRelationshipWithUser(_userIdToShow),
+                                builder: (context, relationshipSnapshot) {
+                                  final relationshipData = relationshipSnapshot.data;
+                                  if (relationshipData == null) return const SizedBox.shrink();
+                                  
+                                  final colorHex = relationshipData['frameColor'] ?? '#FF6B6B';
+                                  final color = Color(int.parse(colorHex.replaceAll('#', '0xFF')));
+                                  final emoji = relationshipData['relationshipEmoji'] ?? '💕';
+                                  final label = relationshipData['relationshipLabel'] ?? '';
+                                  
+                                  return Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: color.withOpacity(0.2),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: color.withOpacity(0.4),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          emoji,
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          label,
+                                          style: TextStyle(
+                                            color: color,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 6),
                           Row(
@@ -973,7 +1267,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               ),
                               const SizedBox(height: 24),
 
-                              // BOTTOM ICONS (Points, Pulsation, Pending)
                               Container(
                                 padding: const EdgeInsets.symmetric(vertical: 12),
                                 child: Row(
@@ -1004,6 +1297,66 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               const SizedBox(height: 16),
 
                               if (FirebaseAuth.instance.currentUser?.uid == _adminUid) ...[
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => const AdminFixScreen(),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.build, color: Colors.amberAccent),
+                                    label: const Text(
+                                      "Admin: Fix Data",
+                                      style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.amberAccent.withOpacity(0.10),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      side: const BorderSide(color: Colors.amberAccent),
+                                      elevation: 0,
+                                      shadowColor: Colors.amberAccent.withOpacity(0.3),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => const RecalculateCountsScreen(),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(Icons.refresh, color: Colors.amberAccent),
+                                    label: const Text(
+                                      "Admin: Recalculate Follow Counts",
+                                      style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.amberAccent.withOpacity(0.10),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      side: const BorderSide(color: Colors.amberAccent),
+                                      elevation: 0,
+                                      shadowColor: Colors.amberAccent.withOpacity(0.3),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                
                                 SizedBox(
                                   width: double.infinity,
                                   child: OutlinedButton.icon(
@@ -1043,33 +1396,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     icon: const Icon(Icons.card_giftcard, color: Colors.greenAccent),
                                     label: const Text(
                                       "Admin: Gift Catalog",
-                                      style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
-                                    ),
-                                    style: OutlinedButton.styleFrom(
-                                      backgroundColor: Colors.greenAccent.withOpacity(0.10),
-                                      padding: const EdgeInsets.symmetric(vertical: 14),
-                                      side: const BorderSide(color: Colors.greenAccent),
-                                      elevation: 0,
-                                      shadowColor: Colors.greenAccent.withOpacity(0.3),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(14),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 14),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: OutlinedButton.icon(
-                                    onPressed: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(builder: (context) => const AdminCoinTopupScreen()),
-                                      );
-                                    },
-                                    icon: const Icon(Icons.monetization_on_outlined, color: Colors.greenAccent),
-                                    label: const Text(
-                                      "Admin: Coin Top-Up",
                                       style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
                                     ),
                                     style: OutlinedButton.styleFrom(
@@ -1192,8 +1518,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                           ),
                                         )
                                       : _actionButton(
-                                          icon: _isFollowing ? Icons.check : Icons.person_add,
-                                          label: _isFollowing ? "Following" : "Follow",
+                                          icon: (_isFollowing && _theyFollowMe)
+                                              ? Icons.people_alt
+                                              : _isFollowing
+                                                  ? Icons.check
+                                                  : Icons.person_add,
+                                          label: (_isFollowing && _theyFollowMe)
+                                              ? "Friends"
+                                              : _isFollowing
+                                                  ? "Following"
+                                                  : _theyFollowMe
+                                                      ? "Follow Back"
+                                                      : "Follow",
                                           color: _isFollowing ? Colors.grey : Colors.amberAccent,
                                           onTap: _toggleFollow,
                                         ),
@@ -1543,14 +1879,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 },
               ),
               _premiumGridItem(
-                icon: Icons.people_outline,
+                icon: Icons.favorite_outline,
                 label: "Relationship",
                 color: Colors.pinkAccent,
-                onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Relationship coming soon")),
-                  );
-                },
+                onTap: _openRelationshipPage,
               ),
               _premiumGridItem(
                 icon: Icons.backpack_outlined,

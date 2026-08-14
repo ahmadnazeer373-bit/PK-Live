@@ -33,8 +33,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
   List<Map<String, dynamic>> _users = [];
   bool _isLoading = true;
 
-  // 🔥 Real-time listeners: list refreshes instantly on any follow/unfollow,
-  // from anywhere in the app, without needing to reopen this screen.
   StreamSubscription<QuerySnapshot>? _followingSub;
   StreamSubscription<QuerySnapshot>? _followersSub;
 
@@ -43,10 +41,17 @@ class _FollowListScreenState extends State<FollowListScreen> {
   bool _followingReady = false;
   bool _followersReady = false;
 
+  bool get _isOwner => _auth.currentUser?.uid == widget.userId;
+
   @override
   void initState() {
     super.initState();
-    _setupListeners();
+    if (_isOwner) {
+      _setupListeners();
+    } else {
+      // 🔒 Only the profile owner can view their own follow list.
+      _isLoading = false;
+    }
   }
 
   @override
@@ -58,7 +63,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
 
   void _setupListeners() {
     if (widget.listType == FollowListType.following) {
-      // Live: users/{userId}/following
       _followingSub = _firestore
           .collection('users')
           .doc(widget.userId)
@@ -69,7 +73,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
         _refreshDisplayedUsers();
       }, onError: (e) => print("Error listening to following: $e"));
     } else if (widget.listType == FollowListType.followers) {
-      // Live: every 'following' doc across all users whose targetUserId == widget.userId
       _followersSub = _firestore
           .collectionGroup('following')
           .where('targetUserId', isEqualTo: widget.userId)
@@ -82,7 +85,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
         _refreshDisplayedUsers();
       }, onError: (e) => print("Error listening to followers: $e"));
     } else {
-      // Friends = mutual follow, needs both streams live at once
       _followingSub = _firestore
           .collection('users')
           .doc(widget.userId)
@@ -116,7 +118,7 @@ class _FollowListScreenState extends State<FollowListScreen> {
     } else if (widget.listType == FollowListType.followers) {
       ids = _followerIds.toList();
     } else {
-      if (!_followingReady || !_followersReady) return; // wait for both sides
+      if (!_followingReady || !_followersReady) return;
       ids = _followingIds.intersection(_followerIds).toList();
     }
 
@@ -179,7 +181,35 @@ class _FollowListScreenState extends State<FollowListScreen> {
     );
   }
 
-  // 🔥 CHANGE 1: _toggleFollow UPDATED with mutual friends logic
+  // 🔔 Writes a notification doc into the target user's notifications feed.
+  // Never notifies yourself; failures are swallowed (a lost notification
+  // shouldn't block the follow action itself).
+  Future<void> _sendNotification({
+    required String toUid,
+    required String fromUid,
+    required String type,
+    required String title,
+    required String body,
+  }) async {
+    if (toUid == fromUid) return;
+    try {
+      await _firestore
+          .collection('notifications')
+          .doc(toUid)
+          .collection('items')
+          .add({
+        'type': type,
+        'senderId': fromUid,
+        'title': title,
+        'body': body,
+        'timestamp': FieldValue.serverTimestamp(),
+        'read': false,
+      });
+    } catch (e) {
+      debugPrint('DEBUG (list) notification send failed: $e');
+    }
+  }
+
   Future<void> _toggleFollow(String targetUid, bool isFollowing) async {
     final currentUid = _auth.currentUser?.uid;
     if (currentUid == null || targetUid == currentUid) return;
@@ -190,48 +220,108 @@ class _FollowListScreenState extends State<FollowListScreen> {
       final followRef = currentUserRef.collection('following').doc(targetUid);
 
       if (isFollowing) {
-        // UNFOLLOW
+        // 🔥 UNFOLLOW
         await followRef.delete();
-        await currentUserRef.update({'followingCount': FieldValue.increment(-1)});
-        await targetUserRef.update({'followersCount': FieldValue.increment(-1)});
-        
-        // 🔥 NEW: Remove from friends if exists
-        await currentUserRef.collection('friends').doc(targetUid).delete();
-        await targetUserRef.collection('friends').doc(currentUid).delete();
-        
+
+        final theyFollowMe = await targetUserRef.collection('following').doc(currentUid).get();
+        debugPrint('DEBUG (list) theyFollowMe.exists = ${theyFollowMe.exists} | checking users/$targetUid/following/$currentUid');
+
+        // 🔔 Clear any pending "Friend Request" entry for this pair in
+        // either direction — it no longer applies once the relationship
+        // changes.
+        await targetUserRef.collection('followers').doc(currentUid).delete();
+        await currentUserRef.collection('followers').doc(targetUid).delete();
+
+        if (theyFollowMe.exists) {
+          await currentUserRef.collection('friends').doc(targetUid).delete();
+          await targetUserRef.collection('friends').doc(currentUid).delete();
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(-1),
+            'friendsCount': FieldValue.increment(-1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(-1),
+            'friendsCount': FieldValue.increment(-1),
+          });
+
+          // 🔔 Target still follows me even though I just unfollowed them —
+          // that's a one-directional follow now, so it goes back into my
+          // own pending Friend Request list.
+          await currentUserRef.collection('followers').doc(targetUid).set({
+            'followerId': targetUid,
+            'followedAt': FieldValue.serverTimestamp(),
+          });
+        } else {
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(-1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(-1),
+          });
+        }
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Unfollowed'), backgroundColor: Colors.grey),
           );
         }
       } else {
-        // FOLLOW
+        // 🔥 FOLLOW
         await followRef.set({
           'followedAt': FieldValue.serverTimestamp(),
           'targetUserId': targetUid,
         });
-        await currentUserRef.update({'followingCount': FieldValue.increment(1)});
-        await targetUserRef.update({'followersCount': FieldValue.increment(1)});
-        
-        // 🔥 NEW: Check for mutual follow
-        final reverseCheck = await targetUserRef
-            .collection('following')
-            .doc(currentUid)
-            .get();
 
-        if (reverseCheck.exists) {
-          // Mutual follow - add to friends
+        final theyFollowMe = await targetUserRef.collection('following').doc(currentUid).get();
+        debugPrint('DEBUG (list) FOLLOW theyFollowMe.exists = ${theyFollowMe.exists} | checking users/$targetUid/following/$currentUid');
+
+        if (theyFollowMe.exists) {
+          // 🔔 Mutual now — resolve the pending request target left in my
+          // own Friend Request list, and become friends.
+          await currentUserRef.collection('followers').doc(targetUid).delete();
+
           await currentUserRef.collection('friends').doc(targetUid).set({
             'friendId': targetUid,
             'timestamp': FieldValue.serverTimestamp(),
           });
-
           await targetUserRef.collection('friends').doc(currentUid).set({
             'friendId': currentUid,
             'timestamp': FieldValue.serverTimestamp(),
           });
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(1),
+            'friendsCount': FieldValue.increment(1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(1),
+            'friendsCount': FieldValue.increment(1),
+          });
+        } else {
+          // 🔔 One-directional follow — show up as a pending Friend
+          // Request for the target, and notify them.
+          await targetUserRef.collection('followers').doc(currentUid).set({
+            'followerId': currentUid,
+            'followedAt': FieldValue.serverTimestamp(),
+          });
+
+          await currentUserRef.update({
+            'followingCount': FieldValue.increment(1),
+          });
+          await targetUserRef.update({
+            'followersCount': FieldValue.increment(1),
+          });
+
+          await _sendNotification(
+            toUid: targetUid,
+            fromUid: currentUid,
+            type: 'follow',
+            title: 'New Follower',
+            body: 'started following you',
+          );
         }
-        
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Followed!'), backgroundColor: Colors.green),
@@ -239,6 +329,7 @@ class _FollowListScreenState extends State<FollowListScreen> {
         }
       }
     } catch (e) {
+      debugPrint('DEBUG (list) _toggleFollow ERROR: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
@@ -246,7 +337,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
       }
     }
   }
-
   @override
   Widget build(BuildContext context) {
     final String title = widget.listType == FollowListType.friends
@@ -326,7 +416,9 @@ class _FollowListScreenState extends State<FollowListScreen> {
           ),
         ),
       ),
-      body: _isLoading
+      body: !_isOwner
+          ? _buildPrivateState()
+          : _isLoading
           ? const Center(
               child: CircularProgressIndicator(
                 color: Colors.amberAccent,
@@ -336,7 +428,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
               ? _buildEmptyState(title)
               : Column(
                   children: [
-                    // 🔥 Stats Header
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       child: Row(
@@ -410,7 +501,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
     );
   }
 
-  // 🔥 Premium User Tile
   Widget _buildPremiumUserTile({
     required String uid,
     required String name,
@@ -443,10 +533,8 @@ class _FollowListScreenState extends State<FollowListScreen> {
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              // 🔥 Premium Profile Picture with Glow
               Stack(
                 children: [
-                  // Glow Effect
                   if (vipLevel > 0)
                     Container(
                       width: 56,
@@ -462,7 +550,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
                         ),
                       ),
                     ),
-                  // Profile Picture with VIP Border
                   Container(
                     width: 52,
                     height: 52,
@@ -503,7 +590,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
               ),
               const SizedBox(width: 14),
 
-              // 🔥 Name + VIP
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -558,7 +644,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    // 🔥 Mutual/Badge
                     if (widget.listType == FollowListType.friends)
                       Row(
                         children: [
@@ -581,7 +666,6 @@ class _FollowListScreenState extends State<FollowListScreen> {
                 ),
               ),
 
-              // 🔥 Follow Button (Premium Style)
               if (!isSelf)
                 StreamBuilder<DocumentSnapshot>(
                   stream: _firestore
@@ -590,66 +674,100 @@ class _FollowListScreenState extends State<FollowListScreen> {
                       .collection('following')
                       .doc(uid)
                       .snapshots(),
-                  builder: (context, snapshot) {
-                    final isFollowing = snapshot.hasData && snapshot.data!.exists;
-                    return GestureDetector(
-                      onTap: () => _toggleFollow(uid, isFollowing),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 7,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: isFollowing
-                              ? LinearGradient(
-                                  colors: [
-                                    Colors.greenAccent.withOpacity(0.15),
-                                    Colors.greenAccent.withOpacity(0.05),
-                                  ],
-                                )
-                              : const LinearGradient(
-                                  colors: [Color(0xFFFF6B6B), Color(0xFFFF3366)],
-                                ),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: isFollowing
-                                ? Colors.greenAccent
-                                : Colors.transparent,
-                            width: 1,
-                          ),
-                          boxShadow: isFollowing
-                              ? null
-                              : [
-                                  BoxShadow(
-                                    color: Colors.pinkAccent.withOpacity(0.3),
-                                    blurRadius: 8,
-                                  ),
-                                ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              isFollowing ? Icons.check : Icons.person_add,
-                              color: isFollowing
-                                  ? Colors.greenAccent
-                                  : Colors.white,
-                              size: 14,
+                  builder: (context, mySnap) {
+                    final isFollowing = mySnap.hasData && mySnap.data!.exists;
+
+                    return StreamBuilder<DocumentSnapshot>(
+                      stream: _firestore
+                          .collection('users')
+                          .doc(uid)
+                          .collection('following')
+                          .doc(_auth.currentUser?.uid)
+                          .snapshots(),
+                      builder: (context, theirSnap) {
+                        final theyFollowMe = theirSnap.hasData && theirSnap.data!.exists;
+
+                        final bool isFriends = isFollowing && theyFollowMe;
+                        final bool isFollowBack = !isFollowing && theyFollowMe;
+
+                        final String label = isFriends
+                            ? 'Friends'
+                            : isFollowing
+                                ? 'Following'
+                                : isFollowBack
+                                    ? 'Follow Back'
+                                    : 'Follow';
+
+                        final IconData iconData = isFriends
+                            ? Icons.people_alt
+                            : isFollowing
+                                ? Icons.check
+                                : Icons.person_add;
+
+                        // Friends/Following = green (already-connected state).
+                        // Follow / Follow Back = pink accent (action needed).
+                        final bool isConnected = isFollowing;
+
+                        return GestureDetector(
+                          onTap: () => _toggleFollow(uid, isFollowing),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 7,
                             ),
-                            const SizedBox(width: 4),
-                            Text(
-                              isFollowing ? 'Following' : 'Follow',
-                              style: TextStyle(
-                                color: isFollowing
+                            decoration: BoxDecoration(
+                              gradient: isConnected
+                                  ? LinearGradient(
+                                      colors: [
+                                        Colors.greenAccent.withOpacity(0.15),
+                                        Colors.greenAccent.withOpacity(0.05),
+                                      ],
+                                    )
+                                  : const LinearGradient(
+                                      colors: [Color(0xFFFF6B6B), Color(0xFFFF3366)],
+                                    ),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: isConnected
                                     ? Colors.greenAccent
-                                    : Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
+                                    : Colors.transparent,
+                                width: 1,
                               ),
+                              boxShadow: isConnected
+                                  ? null
+                                  : [
+                                      BoxShadow(
+                                        color: Colors.pinkAccent.withOpacity(0.3),
+                                        blurRadius: 8,
+                                      ),
+                                    ],
                             ),
-                          ],
-                        ),
-                      ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  iconData,
+                                  color: isConnected
+                                      ? Colors.greenAccent
+                                      : Colors.white,
+                                  size: 14,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  label,
+                                  style: TextStyle(
+                                    color: isConnected
+                                        ? Colors.greenAccent
+                                        : Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -660,7 +778,52 @@ class _FollowListScreenState extends State<FollowListScreen> {
     );
   }
 
-  // 🔥 Empty State
+  Widget _buildPrivateState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  Colors.white.withOpacity(0.06),
+                  Colors.white.withOpacity(0.02),
+                ],
+              ),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.lock_outline,
+              color: Colors.white24,
+              size: 36,
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'This list is private',
+            style: TextStyle(
+              color: Colors.white38,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Only the account owner can view this',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.2),
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEmptyState(String title) {
     return Center(
       child: Column(

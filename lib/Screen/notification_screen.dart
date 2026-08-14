@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../profile_screen.dart';
 import '../vip_utils.dart';
-import 'chat_screen.dart'; // 🔥 FIXED: chat_screen.dart lib/screen/ mein hai
+import 'chat_screen.dart';
 
 enum NotificationTab {
   inbox,
@@ -25,6 +26,161 @@ class _NotificationScreenState extends State<NotificationScreen> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final Set<String> _deletingChatIds = {};
+
+  // 🔥 Track unread counts per tab
+  int _unreadFriendRequests = 0;
+  int _unreadNotifications = 0;
+  int _unreadVisitors = 0;
+  int _unreadChats = 0;
+  int _totalUnread = 0;
+
+  StreamSubscription<QuerySnapshot>? _friendRequestSub;
+  StreamSubscription<QuerySnapshot>? _notificationSub;
+  StreamSubscription<QuerySnapshot>? _visitorSub;
+  StreamSubscription<QuerySnapshot>? _chatSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _setupCountListeners();
+  }
+
+  @override
+  void dispose() {
+    _friendRequestSub?.cancel();
+    _notificationSub?.cancel();
+    _visitorSub?.cancel();
+    _chatSub?.cancel();
+    super.dispose();
+  }
+
+  // 🔥 Setup listeners for unread counts
+  void _setupCountListeners() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return;
+
+    // Friend Requests (followers collection)
+    _friendRequestSub = _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('followers')
+        .snapshots()
+        .listen((snap) {
+      setState(() {
+        _unreadFriendRequests = snap.docs.length;
+        _updateTotalUnread();
+      });
+    });
+
+    // Notifications (unread items)
+    _notificationSub = _firestore
+        .collection('notifications')
+        .doc(uid)
+        .collection('items')
+        .where('read', isEqualTo: false)
+        .snapshots()
+        .listen((snap) {
+      setState(() {
+        _unreadNotifications = snap.docs.length;
+        _updateTotalUnread();
+      });
+    });
+
+    // Visitors - unread count
+    _visitorSub = _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('visitors')
+        .where('read', isEqualTo: false)
+        .snapshots()
+        .listen((snap) {
+      setState(() {
+        _unreadVisitors = snap.docs.length;
+        _updateTotalUnread();
+      });
+    });
+
+    // Chats (unread messages)
+    _chatSub = _firestore
+        .collection('chats')
+        .where('participants', arrayContains: uid)
+        .snapshots()
+        .listen((snap) {
+      int unread = 0;
+      for (final doc in snap.docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final unreadCounts = Map<String, dynamic>.from(data['unreadCounts'] ?? {});
+        unread += (unreadCounts[uid] ?? 0) as int;
+      }
+      setState(() {
+        _unreadChats = unread;
+        _updateTotalUnread();
+      });
+    });
+  }
+
+  void _updateTotalUnread() {
+    _totalUnread = _unreadFriendRequests + _unreadNotifications + _unreadVisitors + _unreadChats;
+  }
+
+  // 🔥 Mark tab as read when opened
+  Future<void> _markTabAsRead(NotificationTab tab) async {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return;
+
+    try {
+      switch (tab) {
+        case NotificationTab.friendRequests:
+          break;
+        case NotificationTab.notifications:
+          final batch = _firestore.batch();
+          final snap = await _firestore
+              .collection('notifications')
+              .doc(uid)
+              .collection('items')
+              .where('read', isEqualTo: false)
+              .get();
+          for (final doc in snap.docs) {
+            batch.update(doc.reference, {'read': true});
+          }
+          await batch.commit();
+          break;
+        case NotificationTab.visitors:
+          final batch = _firestore.batch();
+          final snap = await _firestore
+              .collection('users')
+              .doc(uid)
+              .collection('visitors')
+              .where('read', isEqualTo: false)
+              .get();
+          for (final doc in snap.docs) {
+            batch.update(doc.reference, {'read': true});
+          }
+          await batch.commit();
+          break;
+        case NotificationTab.inbox:
+          final chats = await _firestore
+              .collection('chats')
+              .where('participants', arrayContains: uid)
+              .get();
+          final batch = _firestore.batch();
+          for (final chatDoc in chats.docs) {
+            final data = chatDoc.data() as Map<String, dynamic>;
+            final unreadCounts = Map<String, dynamic>.from(data['unreadCounts'] ?? {});
+            if ((unreadCounts[uid] ?? 0) as int > 0) {
+              unreadCounts[uid] = 0;
+              batch.update(chatDoc.reference, {'unreadCounts': unreadCounts});
+            }
+          }
+          await batch.commit();
+          break;
+        default:
+          break;
+      }
+    } catch (e) {
+      debugPrint("Error marking tab as read: $e");
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -65,13 +221,39 @@ class _NotificationScreenState extends State<NotificationScreen> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      const Text(
-                        "Messages",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                        ),
+                      Stack(
+                        children: [
+                          const Text(
+                            "Messages",
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 20,
+                            ),
+                          ),
+                          if (_totalUnread > 0)
+                            Positioned(
+                              right: -22,
+                              top: -2,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.redAccent,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                                child: Text(
+                                  _totalUnread > 99 ? '99+' : '$_totalUnread',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),
@@ -96,21 +278,25 @@ class _NotificationScreenState extends State<NotificationScreen> {
                               label: "Inbox",
                               icon: Icons.chat_bubble_outline,
                               tab: NotificationTab.inbox,
+                              count: _unreadChats,
                             ),
                             _buildTab(
                               label: "Friend Request",
                               icon: Icons.person_add,
                               tab: NotificationTab.friendRequests,
+                              count: _unreadFriendRequests,
                             ),
                             _buildTab(
                               label: "Notifications",
                               icon: Icons.notifications,
                               tab: NotificationTab.notifications,
+                              count: _unreadNotifications,
                             ),
                             _buildTab(
                               label: "Visitors",
                               icon: Icons.visibility,
                               tab: NotificationTab.visitors,
+                              count: _unreadVisitors,
                             ),
                           ],
                         ),
@@ -131,10 +317,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
     required String label,
     required IconData icon,
     required NotificationTab tab,
+    required int count,
   }) {
     final isSelected = _selectedTab == tab;
     return GestureDetector(
-      onTap: () => setState(() => _selectedTab = tab),
+      onTap: () {
+        setState(() => _selectedTab = tab);
+        _markTabAsRead(tab);
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
@@ -157,10 +347,37 @@ class _NotificationScreenState extends State<NotificationScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              color: isSelected ? Colors.white : Colors.white54,
-              size: 16,
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  icon,
+                  color: isSelected ? Colors.white : Colors.white54,
+                  size: 16,
+                ),
+                if (count > 0 && !isSelected)
+                  Positioned(
+                    right: -6,
+                    top: -6,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: const BoxDecoration(
+                        color: Colors.redAccent,
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text(
+                        count > 9 ? '9+' : '$count',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(width: 6),
             Text(
@@ -223,7 +440,17 @@ class _NotificationScreenState extends State<NotificationScreen> {
           itemBuilder: (context, index) {
             final data = chats[index].data() as Map<String, dynamic>;
             final participants = List<String>.from(data['participants']);
-            final otherUid = participants.firstWhere((id) => id != myUid);
+            
+            if (participants.length < 2) {
+              return const SizedBox.shrink();
+            }
+            
+            String otherUid;
+            try {
+              otherUid = participants.firstWhere((id) => id != myUid);
+            } catch (e) {
+              return const SizedBox.shrink();
+            }
 
             final names = Map<String, dynamic>.from(data['participantNames'] ?? {});
             final avatars = Map<String, dynamic>.from(data['participantAvatars'] ?? {});
@@ -241,11 +468,15 @@ class _NotificationScreenState extends State<NotificationScreen> {
             final chatId = chats[index].id;
             final isDeleting = _deletingChatIds.contains(chatId);
 
+            final unreadCounts = Map<String, dynamic>.from(data['unreadCounts'] ?? {});
+            final unreadCount = (unreadCounts[myUid] ?? 0) as int;
+
             return InkWell(
               borderRadius: BorderRadius.circular(16),
               onTap: isDeleting
                   ? null
                   : () {
+                      _markChatAsRead(chatId, myUid);
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -298,15 +529,39 @@ class _NotificationScreenState extends State<NotificationScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              otherName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 15,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    otherName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                                if (unreadCount > 0)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.redAccent,
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                                    child: Text(
+                                      unreadCount > 9 ? '9+' : '$unreadCount',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ),
+                              ],
                             ),
                             const SizedBox(height: 3),
                             Text(
@@ -341,6 +596,21 @@ class _NotificationScreenState extends State<NotificationScreen> {
         );
       },
     );
+  }
+
+  Future<void> _markChatAsRead(String chatId, String uid) async {
+    try {
+      final doc = await _firestore.collection('chats').doc(chatId).get();
+      if (!doc.exists) return;
+      final data = doc.data() as Map<String, dynamic>;
+      final unreadCounts = Map<String, dynamic>.from(data['unreadCounts'] ?? {});
+      if ((unreadCounts[uid] ?? 0) as int > 0) {
+        unreadCounts[uid] = 0;
+        await doc.reference.update({'unreadCounts': unreadCounts});
+      }
+    } catch (e) {
+      debugPrint("Error marking chat as read: $e");
+    }
   }
 
   String _formatTime(DateTime dt) {
@@ -415,10 +685,13 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   // 🔥 ========== FRIEND REQUESTS ==========
   Widget _buildFriendRequests() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+
     return StreamBuilder<QuerySnapshot>(
       stream: _firestore
           .collection('users')
-          .doc(_auth.currentUser?.uid)
+          .doc(uid)
           .collection('followers')
           .snapshots(),
       builder: (context, snapshot) {
@@ -444,10 +717,13 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   // 🔥 ========== NOTIFICATIONS ==========
   Widget _buildNotifications() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+
     return StreamBuilder<QuerySnapshot>(
       stream: _firestore
           .collection('notifications')
-          .doc(_auth.currentUser?.uid)
+          .doc(uid)
           .collection('items')
           .orderBy('timestamp', descending: true)
           .snapshots(),
@@ -476,8 +752,14 @@ class _NotificationScreenState extends State<NotificationScreen> {
             final title = data['title'] ?? '';
             final body = data['body'] ?? '';
             final senderId = data['senderId'] ?? '';
+            
+            if (senderId.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            
             final timestamp = data['timestamp'] as Timestamp?;
             final bool read = data['read'] ?? false;
+            final String notificationId = notifications[index].id;
 
             return _buildNotificationTile(
               senderId: senderId,
@@ -486,7 +768,8 @@ class _NotificationScreenState extends State<NotificationScreen> {
               type: type,
               timestamp: timestamp,
               read: read,
-              docId: notifications[index].id,
+              docId: notificationId,
+              notificationData: data,
             );
           },
         );
@@ -496,10 +779,13 @@ class _NotificationScreenState extends State<NotificationScreen> {
 
   // 🔥 ========== VISITORS ==========
   Widget _buildVisitors() {
+    final uid = _auth.currentUser?.uid;
+    if (uid == null) return const SizedBox.shrink();
+
     return StreamBuilder<QuerySnapshot>(
       stream: _firestore
           .collection('users')
-          .doc(_auth.currentUser?.uid)
+          .doc(uid)
           .collection('visitors')
           .orderBy('visitedAt', descending: true)
           .snapshots(),
@@ -594,6 +880,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
   }
 
   void _openProfile(String uid) {
+    if (uid.isEmpty) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -852,6 +1139,7 @@ class _NotificationScreenState extends State<NotificationScreen> {
     required Timestamp? timestamp,
     required bool read,
     required String docId,
+    required Map<String, dynamic> notificationData,
   }) {
     String timeStr = '';
     if (timestamp != null) {
@@ -872,6 +1160,9 @@ class _NotificationScreenState extends State<NotificationScreen> {
     } else if (type == 'moment') {
       icon = Icons.post_add;
       iconColor = Colors.amberAccent;
+    } else if (type == 'follow') {
+      icon = Icons.person_add;
+      iconColor = Colors.pinkAccent;
     } else {
       icon = Icons.notifications;
       iconColor = Colors.purpleAccent;
@@ -893,81 +1184,170 @@ class _NotificationScreenState extends State<NotificationScreen> {
           totalRecharge = data['totalRecharge'] ?? 0;
         }
 
-        return Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: read
-                ? Colors.white.withOpacity(0.03)
-                : Colors.white.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: read
-                  ? Colors.white.withOpacity(0.04)
-                  : Colors.amberAccent.withOpacity(0.2),
-              width: read ? 0.5 : 1.5,
-            ),
+        return GestureDetector(
+          onTap: () => _handleNotificationTap(
+            type: type,
+            senderId: senderId,
+            docId: docId,
+            notificationData: notificationData,
           ),
-          child: Row(
-            children: [
-              GestureDetector(
-                onTap: () => _openProfile(senderId),
-                child: CircleAvatar(
-                  radius: 22,
-                  backgroundColor: Colors.white24,
-                  backgroundImage: avatarUrl.isNotEmpty
-                      ? CachedNetworkImageProvider(avatarUrl) as ImageProvider
-                      : null,
-                  child: avatarUrl.isEmpty
-                      ? Text(avatar, style: const TextStyle(fontSize: 18))
-                      : null,
-                ),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: read
+                  ? Colors.white.withOpacity(0.03)
+                  : Colors.white.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: read
+                    ? Colors.white.withOpacity(0.04)
+                    : Colors.amberAccent.withOpacity(0.2),
+                width: read ? 0.5 : 1.5,
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+            ),
+            child: Row(
+              children: [
+                GestureDetector(
+                  onTap: () => _openProfile(senderId),
+                  child: CircleAvatar(
+                    radius: 22,
+                    backgroundColor: Colors.white24,
+                    backgroundImage: avatarUrl.isNotEmpty
+                        ? CachedNetworkImageProvider(avatarUrl) as ImageProvider
+                        : null,
+                    child: avatarUrl.isEmpty
+                        ? Text(avatar, style: const TextStyle(fontSize: 18))
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        body,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.6),
+                          fontSize: 13,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
+                    Icon(icon, color: iconColor, size: 18),
+                    const SizedBox(height: 4),
                     Text(
-                      title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      body,
+                      timeStr,
                       style: TextStyle(
-                        color: Colors.white.withOpacity(0.6),
-                        fontSize: 13,
+                        color: Colors.white.withOpacity(0.3),
+                        fontSize: 10,
                       ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ],
                 ),
-              ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Icon(icon, color: iconColor, size: 18),
-                  const SizedBox(height: 4),
-                  Text(
-                    timeStr,
-                    style: TextStyle(
-                      color: Colors.white.withOpacity(0.3),
-                      fontSize: 10,
-                    ),
-                  ),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
         );
       },
     );
+  }
+
+  // 🔥 ========== HANDLE NOTIFICATION TAP ==========
+  Future<void> _handleNotificationTap({
+    required String type,
+    required String senderId,
+    required String docId,
+    required Map<String, dynamic> notificationData,
+  }) async {
+    if (senderId.isEmpty) return;
+
+    try {
+      final uid = _auth.currentUser?.uid;
+      if (uid != null) {
+        await _firestore
+            .collection('notifications')
+            .doc(uid)
+            .collection('items')
+            .doc(docId)
+            .update({'read': true});
+      }
+    } catch (e) {
+      debugPrint("Error marking notification as read: $e");
+    }
+
+    if (type == 'follow') {
+      _openProfile(senderId);
+    } else if (type == 'moment') {
+      _openMoment(senderId, notificationData);
+    } else if (type == 'message') {
+      _openChat(senderId);
+    } else {
+      _openProfile(senderId);
+    }
+  }
+
+  // 🔥 Open Moment/Post
+  void _openMoment(String senderId, Map<String, dynamic> notificationData) {
+    if (senderId.isEmpty) return;
+    
+    final postId = notificationData['postId'] as String?;
+    
+    if (postId != null && postId.isNotEmpty) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PostDetailScreen(
+            postId: postId,
+            userId: senderId,
+          ),
+        ),
+      );
+    } else {
+      _openProfile(senderId);
+    }
+  }
+
+  // 🔥 Open Chat
+  void _openChat(String userId) async {
+    if (userId.isEmpty) return;
+    
+    try {
+      final userDoc = await _firestore.collection('users').doc(userId).get();
+      if (!userDoc.exists) return;
+      final data = userDoc.data() as Map<String, dynamic>? ?? {};
+      final name = data['name'] ?? 'User';
+      
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatScreen(
+              otherUserId: userId,
+              otherUserName: name,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("Error opening chat: $e");
+    }
   }
 
   // 🔥 ========== EMPTY STATE ==========
@@ -1037,20 +1417,26 @@ class _NotificationScreenState extends State<NotificationScreen> {
           'targetUserId': targetUid,
         });
 
+        await currentUserRef.collection('friends').doc(targetUid).set({
+          'friendId': targetUid,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+        await targetUserRef.collection('friends').doc(currentUid).set({
+          'friendId': currentUid,
+          'timestamp': FieldValue.serverTimestamp(),
+        });
+
         await currentUserRef.update({
           'followingCount': FieldValue.increment(1),
+          'friendsCount': FieldValue.increment(1),
         });
 
         await targetUserRef.update({
           'followersCount': FieldValue.increment(1),
+          'friendsCount': FieldValue.increment(1),
         });
 
-        await _firestore
-            .collection('users')
-            .doc(currentUid)
-            .collection('followers')
-            .doc(targetUid)
-            .delete();
+        await currentUserRef.collection('followers').doc(targetUid).delete();
 
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1068,5 +1454,153 @@ class _NotificationScreenState extends State<NotificationScreen> {
         );
       }
     }
+  }
+}
+
+// 🔥 ========== POST DETAIL SCREEN ==========
+class PostDetailScreen extends StatelessWidget {
+  final String postId;
+  final String userId;
+
+  const PostDetailScreen({
+    super.key,
+    required this.postId,
+    required this.userId,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0D0B1E),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0D0B1E),
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: const Text(
+          "Moment",
+          style: TextStyle(color: Colors.white),
+        ),
+      ),
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('plaza_posts')
+            .doc(postId)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: Colors.amberAccent),
+            );
+          }
+
+          if (!snapshot.hasData || !snapshot.data!.exists) {
+            return const Center(
+              child: Text(
+                "Post not found",
+                style: TextStyle(color: Colors.white54),
+              ),
+            );
+          }
+
+          final doc = snapshot.data!;
+          final data = doc.data() as Map<String, dynamic>? ?? {};
+          
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: Colors.white24,
+                      child: Text(
+                        data['userAvatarEmoji'] ?? '🧑',
+                        style: const TextStyle(fontSize: 18),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      data['userName'] ?? 'User',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if ((data['caption'] ?? '').toString().isNotEmpty)
+                  Text(
+                    data['caption'] ?? '',
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                const SizedBox(height: 10),
+                if ((data['imageUrls'] as List?)?.isNotEmpty ?? false)
+                  ...((data['imageUrls'] as List?) ?? []).map((url) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: CachedNetworkImage(
+                        imageUrl: url.toString(),
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => Container(
+                          height: 300,
+                          color: Colors.white10,
+                          child: const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.amberAccent,
+                              strokeWidth: 2,
+                            ),
+                          ),
+                        ),
+                        errorWidget: (context, url, error) => Container(
+                          height: 300,
+                          color: Colors.white10,
+                          child: const Icon(
+                            Icons.image_not_supported_outlined,
+                            color: Colors.white38,
+                            size: 40,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.favorite_border,
+                      color: Colors.white54,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${data['likesCount'] ?? 0}',
+                      style: const TextStyle(color: Colors.white54),
+                    ),
+                    const SizedBox(width: 16),
+                    Icon(
+                      Icons.mode_comment_outlined,
+                      color: Colors.white54,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${data['commentsCount'] ?? 0}',
+                      style: const TextStyle(color: Colors.white54),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 }
