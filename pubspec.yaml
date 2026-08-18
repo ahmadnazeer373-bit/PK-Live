@@ -6,84 +6,37 @@ publish_to: 'none'
 
 version: 1.0.0+1
 
-
 environment:
   sdk: ">=3.0.0 <4.0.0"
 
-
 dependencies:
-
   flutter:
     sdk: flutter
-
-
   cupertino_icons: ^1.0.8
-
-
-  # State Management
   provider: ^6.1.2
-
-
-  # Firebase - backend (auth, database, etc.)
   firebase_core: ^3.6.0
   firebase_auth: ^5.3.1
   cloud_firestore: ^5.6.12
   firebase_storage: ^12.3.2
-
-
-  # Image picking
   image_picker: ^1.1.2
-
-
-  # Image cropping
   image_cropper: ^8.1.0
-
-
-  # HTTP requests
   http: ^1.2.2
-
-
-  # Google Sign-In
   google_sign_in: ^6.2.1
-
-
-  # Party room voice chat
   permission_handler: ^11.3.1
-
-
-  # Phone number field
   intl_phone_field: ^3.2.0
-
-
-  # Country picker
   country_picker: ^2.0.26
-
-
-  # Date formatting
   intl: ^0.19.0
-
-
-  # Video player for gift videos
   video_player: ^2.8.0
-
-
-  # Cached network image for better image loading
   cached_network_image: ^3.3.1
-  
-  # 🔥 Agora RTC Engine - Version 6.3.0 (NDK Compatible)
   agora_rtc_engine: ^6.3.0
-
+  file_picker: ^8.1.2
+  path_provider: ^2.1.4
 
 dev_dependencies:
-
   flutter_test:
     sdk: flutter
-
-
   flutter_lints: 5.0.0
-
   flutter_launcher_icons: ^0.13.1
-
 
 flutter_launcher_icons:
   android: true
@@ -93,10 +46,7 @@ flutter_launcher_icons:
   adaptive_icon_background: "#000000"
   adaptive_icon_foreground: "lib/assets/logo/app_logo.png"
 
-
 flutter:
-
   uses-material-design: true
-
   assets:
     - lib/assets/logo/app_logo.png
